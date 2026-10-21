@@ -30,3 +30,7 @@ lerna-debug.log*
 .env
 .env.*
 !.env.example
+
+# Documentos locais
+*.pdf
+
