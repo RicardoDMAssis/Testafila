@@ -1,37 +1,40 @@
-# TestaFila (Checa Fila)
+﻿# TestaFila
 
-Aplicação web em Realidade Aumentada para planejamento e dimensionamento de filas em eventos e estabelecimentos comerciais diretamente pelo navegador.
+Editor manual e simulador 3D para planejar filas em metros, com login, projetos
+por proprietário e persistência SQLite. Aplicação atual: Next.js + NestJS.
 
-## Funcionalidades
+**O MVP WebAR ainda não está concluído.** Câmera, mapeamento por hit-test e
+realinhamento não estão integrados ao editor. O diagnóstico `/xr-check` é um
+spike experimental separado, cuja validação física continua pendente.
 
-- **3 Modos de Visualização:** WebXR Nativo, Câmera AR Universal (compatível com Android e iOS) e Simulador 3D.
-- **Demarcação de Filas:** Posicionamento de pedestais virtuais conectados por fitas que mudam de cor (verde para livre, vermelho para colisão).
-- **Zonas Restritas:** Marcação de áreas bloqueadas, como saídas de emergência e corredores.
-- **Cálculos em Tempo Real:** Medição automática do comprimento da fila em metros, estimativa de público (0,60m por pessoa) e detecção de colisões.
-- **Ferramentas Extras:** Validador de acessibilidade (ABNT NBR 9050), gerador automático de fila em formato caracol e exportação de relatório em JSON.
+## Comece aqui
 
-## Tecnologias
+- [Documentação e índice](docs/README.md)
+- [Relatório para o colega](docs/PASSAGEM-COLEGA.md)
+- [Instalar, configurar, criar login e executar](docs/EXECUCAO-LOCAL.md)
+- [O que falta e diferença em relação aos PDFs](docs/REQUISITOS-ESTADO-ATUAL.md)
 
-- JavaScript (ES6+)
-- [Three.js](https://threejs.org/) & WebXR API
-- [Vite](https://vitejs.dev/)
+Não há conta ou senha fixa no código. Cada instalação cria uma conta pelo CLI.
 
-## Como executar
+## Comandos
 
-1. Instale as dependências:
-   ```bash
-   npm install
-   ```
+Na raiz deste repositório, depois de seguir a configuração de ambiente:
 
-2. Inicie o servidor de desenvolvimento:
-   ```bash
-   npm run dev
-   ```
+```powershell
+npm ci
+npm run migrate:api
+npm run dev:api
+```
 
-3. Acesse o endereço exibido no terminal pelo computador ou celular conectado na mesma rede.
+Em outro terminal:
 
----
+```powershell
+npm run dev:web
+```
 
-**Projeto Aplicado V — Realidade Virtual e Aumentada (2026.2)**  
-**Professora:** Profª. Cintia da Costa Souza  
-**Equipe:** João Paulo, Lucas Vinícius e Ricardo Daniel
+Acesse `http://localhost:3000`. Os comandos genéricos `npm run dev` e
+`npm run build` ainda pertencem ao protótipo Vite preservado do colega.
+Para a aplicação atual, use `dev:web`, `dev:api`, `build:web` e `build:api`.
+
+Documentação detalhada está em `docs`; `AGENTS.md` permanece na raiz como
+instrução operacional dos agentes. Não versionar `.env`, SQLite ou credenciais.

@@ -1,9 +1,19 @@
 # Dependencies
 node_modules/
+.maestri/
 
 # Build output
 dist/
 dist-ssr/
+.next/
+coverage/
+*.tsbuildinfo
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.db-shm
+*.db-wal
 *.local
 
 # Logs
@@ -33,4 +43,5 @@ lerna-debug.log*
 
 # Documentos locais
 *.pdf
+!docs/referencias/*.pdf
 

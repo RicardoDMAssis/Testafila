@@ -3,11 +3,25 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "workspaces": [
+    "apps/web",
+    "apps/api"
+  ],
   "description": "Checa Fila (TestaFila) - Gestão e Dimensionamento de Filas em Realidade Aumentada (WebXR)",
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
-    "preview": "vite preview --host"
+    "preview": "vite preview --host",
+    "dev:legacy": "vite --host",
+    "dev:web": "npm run dev --workspace @testafila/web",
+    "dev:api": "npm run dev --workspace @testafila/api",
+    "build:web": "npm run build --workspace @testafila/web",
+    "build:api": "npm run build --workspace @testafila/api",
+    "typecheck:web": "npm run typecheck --workspace @testafila/web",
+    "typecheck:api": "npm run typecheck --workspace @testafila/api",
+    "test:api": "npm run test --workspace @testafila/api",
+    "migrate:api": "npm run migrate --workspace @testafila/api",
+    "user:create": "npm run user:create --workspace @testafila/api"
   },
   "dependencies": {
     "three": "^0.170.0"
@@ -15,5 +29,10 @@
   "devDependencies": {
     "@vitejs/plugin-basic-ssl": "^1.1.0",
     "vite": "^6.0.0"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true,
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.2": true
   }
 }
