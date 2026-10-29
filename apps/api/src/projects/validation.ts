@@ -22,7 +22,10 @@ const sceneSchema = z.object({
   posts: z.array(z.object({ id, position: point, heightMeters: z.number().finite().positive().max(50), baseRadiusMeters: z.number().finite().positive().max(100) }).strict()).max(5000),
   belts: z.array(z.object({ id, fromPostId: id, toPostId: id, heightMeters: z.number().finite().positive().max(50) }).strict()).max(5000),
   routes: z.array(z.object({ id, points: z.array(vertex).min(2).max(5000) }).strict()).max(500),
-  people: z.array(z.object({ id, routeId: id, distanceAlongRouteMeters: z.number().finite().nonnegative(), position: point, yawRadians: z.number().finite() }).strict()).max(10000),
+  people: z.array(z.object({ id, routeId: id.nullable(), distanceAlongRouteMeters: z.number().finite().nonnegative().nullable(), position: point, yawRadians: z.number().finite() }).strict().refine(
+    (person) => (person.routeId === null) === (person.distanceAlongRouteMeters === null),
+    'Pessoa livre exige routeId e distanceAlongRouteMeters nulos juntos',
+  )).max(10000),
   simulation: z.object({ spacingMeters: z.number().finite().positive(), personHeightMeters: z.number().finite().positive(), personRadiusMeters: z.number().finite().positive(), clearanceMeters: z.number().finite().nonnegative() }).strict(),
 }).strict();
 const saveSchema = z.object({ name: z.string().trim().min(1).max(100), scene: sceneSchema, expectedRevision: z.number().int().positive().nullable() }).strict();
@@ -71,6 +74,8 @@ export function validateProjectScene(input: unknown): ProjectScene {
   }
   const routes = new Map(scene.routes.map((route) => [route.id, route]));
   for (const person of scene.people) {
+    if (person.routeId === null && person.distanceAlongRouteMeters === null) continue;
+    if (person.routeId === null || person.distanceAlongRouteMeters === null) bad(`Pessoa ${person.id} possui vínculo de percurso inconsistente`);
     const route = routes.get(person.routeId);
     if (!route) bad(`Pessoa ${person.id} referencia percurso inexistente`);
     const measuredLength = route.points.slice(1).reduce((sum, p, i) => sum + Math.hypot(p.x - route.points[i]!.x, p.z - route.points[i]!.z), 0);

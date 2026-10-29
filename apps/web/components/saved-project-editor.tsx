@@ -7,6 +7,7 @@ import type { ProjectScene, SaveProjectInput, SavedProject } from "../../../cont
 import { apiFetch, readApiError } from "../lib/http";
 import type { SessionResponse } from "../lib/contracts";
 import { QueueEditor } from "./queue-editor";
+import { BrandLogo } from "./brand-logo";
 
 export function SavedProjectEditor() {
   const { id } = useParams<{ id: string }>();
@@ -150,11 +151,9 @@ export function SavedProjectEditor() {
   </section></main>;
   if (!project || !draft) return null;
 
-  return <main className="project-shell">
+  return <main className="project-shell editor-viewport">
     <header className="project-header">
-      <Link className="wordmark dashboard-wordmark" href={`/projects/${encodeURIComponent(project.id)}`} aria-label="Voltar ao projeto">
-        <span>testa<span className="wordmark-light">fila</span></span>
-      </Link>
+      <BrandLogo href={`/projects/${encodeURIComponent(project.id)}`} className="dashboard-wordmark" label="Voltar ao projeto" />
       <span className="project-header-label">EDIÇÃO <span>·</span> REV. {project.revision}</span>
       <Link className="button-quiet" href={`/projects/${encodeURIComponent(project.id)}`}>Cancelar edição</Link>
     </header>

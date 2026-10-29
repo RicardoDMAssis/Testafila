@@ -25,7 +25,7 @@ class SceneViewerBoundary extends Component<BoundaryProps, { failed: boolean }> 
     if (this.state.failed) {
       return (
         <div className="scene-unavailable" role="status">
-          <p>A visualização 3D não está disponível neste navegador. Seus dados e a tabela de coordenadas continuam acessíveis.</p>
+          <p>A visualização 3D está indisponível. Seus dados permanecem preservados.</p>
           <button className="button-secondary" type="button" onClick={this.props.onRetry}>Tentar abrir a visualização</button>
         </div>
       );

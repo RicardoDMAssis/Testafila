@@ -115,6 +115,19 @@ rode o build antes de investigar erro por ausência de `.next/types`.
 
 ## Celular, HTTPS e limites
 
+### QA automatizado do editor 3D
+
+Com Next e Nest já iniciados, defina `TEST_EMAIL` e `TEST_PASSWORD` no ambiente
+para uma conta administrativa criada localmente e execute `npm run test:editor`.
+Não grave essas credenciais no repositório. O teste cria projetos nessa conta.
+`TEST_BASE_URL` permite mudar a origem (padrão `http://localhost:3000`).
+
+A configuração usa Edge instalado no Windows e WebGL via SwiftShader. Em outro
+ambiente, instale o Chromium do Playwright (`npx playwright install chromium`) ou
+defina `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`. Há projetos desktop 1280×900,
+mobile 390×844 e small-mobile 320×568; capturas e traces ficam em `test-results`
+(ignorado pelo Git). Viewport/touch emulado não substitui aparelho físico.
+
 `localhost` no celular é o próprio celular. Um acesso pela rede local exige URL
 acessível, APP_ORIGIN/BETTER_AUTH_URL coerentes e proxy correto. Para cookies
 seguros e WebXR em dispositivo, prepare HTTPS confiável no navegador do aparelho;

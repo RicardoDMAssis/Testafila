@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch, readApiError } from "../lib/http";
 import type { SessionResponse } from "../lib/contracts";
+import { BrandLogo } from "./brand-logo";
 
 export function LoginForm() {
   const router = useRouter();
@@ -58,9 +59,7 @@ export function LoginForm() {
     <>
     <a className="skip-link" href="#main-content">Pular para o conteúdo</a>
     <main className="login-page" id="main-content">
-      <header className="wordmark" aria-label="TestaFila">
-        <span>testa<span className="wordmark-light">fila</span></span>
-      </header>
+      <header><BrandLogo className="login-brand-mark" /></header>
 
       <section className="login-layout" aria-labelledby="login-title">
         <div className="login-intro">
@@ -78,7 +77,7 @@ export function LoginForm() {
         </div>
 
         <div className="login-panel">
-          <p className="panel-index">ACESSO À CONTA <span>01 / 01</span></p>
+          <p className="panel-index">Acesso à conta</p>
           <h2>Acesse seus projetos</h2>
           <p className="panel-copy">Use o e-mail e a senha da sua conta.</p>
           {checking ? (
@@ -100,7 +99,6 @@ export function LoginForm() {
           <p className="login-footnote">Acesso restrito a contas provisionadas pela equipe.</p>
         </div>
       </section>
-      <footer className="site-footer"><span>TESTAFILA</span><span>Planejamento espacial de filas</span><span>01 | ACESSO</span></footer>
     </main>
     </>
   );

@@ -1,5 +1,22 @@
 # Relatório de desenvolvimento e passagem
 
+## Atualização de 28/10 — editor 3D
+
+O lote 4 substitui a entrada por coordenadas por retângulo com largura/profundidade
+e ajuste dos cantos por arraste. Altura das paredes fica interna. A montagem abre
+direto no canvas com paleta de postes, fitas e pessoas; áreas restritas são opcionais
+e desenhadas por arraste com confirmação. Pessoas podem existir sem percurso,
+ser movidas/giradas e acrescentadas atrás da seleção com espaçamento explícito.
+O backend aceita e persiste esse contrato, mantendo compatibilidade com percursos
+antigos. A logo original foi restaurada e o mobile ganhou bandeja recolhível e
+barra de câmera. Ver [SPRINT-04.md](SPRINT-04.md) e [FRONTEND.md](FRONTEND.md).
+
+A validação integrada do lote 4 está em [QA-LOTE-04.md](QA-LOTE-04.md): build final,
+integração Nest e três viewports aprovados, com capturas e limites. Os resultados
+de 27/10 abaixo descrevem a interface anterior. Câmera/AR de produto continuam
+pendentes: dimensões ainda são fornecidas manualmente em metros. As skills e
+personas solicitadas estão documentadas em [SKILLS-LOTE04.md](SKILLS-LOTE04.md).
+
 **Data:** 27/10/2026. **Projeto:** TestaFila / Checa Fila.
 **Branch de entrega:** `main`. **Base anterior:** `70745cc`.
 

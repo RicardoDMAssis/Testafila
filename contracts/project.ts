@@ -52,9 +52,10 @@ export interface QueueRoute {
 
 export interface PersonPlacement {
   id: EntityId;
-  routeId: EntityId;
-  distanceAlongRouteMeters: Meters;
-  // Cache validado contra percurso no servidor; nunca segunda fonte de posição.
+  // null/null = colocação livre no editor visual; string/número = percurso legado.
+  routeId: EntityId | null;
+  distanceAlongRouteMeters: Meters | null;
+  // Para percurso, cache validado no servidor; livre: posição e yaw são a fonte.
   position: PointXZ;
   yawRadians: number;
 }

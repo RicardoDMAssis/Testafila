@@ -8,6 +8,7 @@ import { validateManualEnvironment, getEnvironmentArea, getEnvironmentPerimeterL
 import { apiFetch, readApiError } from "../lib/http";
 import { ScenePreview } from "./scene-preview";
 import type { SessionResponse } from "../lib/contracts";
+import { BrandLogo } from "./brand-logo";
 
 function formatMeters(value: number): string {
   return new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 }).format(value);
@@ -72,7 +73,7 @@ export function SavedProjectView() {
 
   if (error || !project) {
     return <main className="project-shell">
-      <header className="project-header"><Link className="wordmark dashboard-wordmark" href="/dashboard"><span>testa<span className="wordmark-light">fila</span></span></Link></header>
+      <header className="project-header"><BrandLogo href="/dashboard" className="dashboard-wordmark" /></header>
       <section className="project-flow-content project-load-error" role="alert">
         <p className="eyebrow">PROJETO INDISPONÍVEL</p><h1>Não foi possível abrir esta planta.</h1>
         <p>{error || "O servidor não retornou os dados do projeto."}</p>
@@ -91,9 +92,7 @@ export function SavedProjectView() {
   return (
     <main className="project-shell">
       <header className="project-header">
-        <Link className="wordmark dashboard-wordmark" href="/dashboard" aria-label="Voltar aos projetos">
-          <span>testa<span className="wordmark-light">fila</span></span>
-        </Link>
+        <BrandLogo href="/dashboard" className="dashboard-wordmark" label="Voltar aos projetos" />
         <span className="project-header-label">PROJETO <span>·</span> REVISÃO</span>
         <Link className="button-quiet" href="/dashboard">Meus projetos</Link>
       </header>
@@ -110,7 +109,7 @@ export function SavedProjectView() {
           </div>
         </div>
 
-        {environmentIsValid ? <ScenePreview scene={project.scene} view={view} /> : (
+        {environmentIsValid ? <ScenePreview scene={project.scene} view={view} showWalls={false} /> : (
           <div className="validation-list" role="alert"><p>A geometria salva não passou na validação local.</p>
             <ul>{validation?.errors.map((message, index) => <li key={`${index}-${message}`}>{message}</li>)}</ul>
           </div>
@@ -119,7 +118,6 @@ export function SavedProjectView() {
         <div className="saved-project-data">
           <div><span className="eyebrow">ÁREA</span><strong>{environmentIsValid ? `${formatMeters(getEnvironmentArea(environment))} m²` : "Indisponível"}</strong></div>
           <div><span className="eyebrow">PERÍMETRO</span><strong>{environmentIsValid ? `${formatMeters(getEnvironmentPerimeterLength(environment))} m` : "Indisponível"}</strong></div>
-          <div><span className="eyebrow">ALTURA DAS PAREDES</span><strong>{formatMeters(environment.wallHeightMeters)} m</strong></div>
           <div><span className="eyebrow">FONTE</span><strong>{sourceLabel}</strong></div>
         </div>
         <p className="measurement-note">{environment.measurement.checks.length === 0

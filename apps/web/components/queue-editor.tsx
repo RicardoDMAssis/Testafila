@@ -1,534 +1,975 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
-import type { Belt, PointXZ, ProjectScene, QueueRoute, RestrictedArea, Stanchion, Vertex } from "../../../contracts/project.ts";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import type { Belt, PointXZ, ProjectScene, PersonPlacement, RestrictedArea, Stanchion, Vertex } from "../../../contracts/project.ts";
 import type { EditorSelection, QueueCommand, QueueHistory } from "../../../contracts/queue-editor.ts";
-import { createQueueHistory, executeQueueCommand, getQueueStats, redoQueue, undoQueue, validateQueueScene } from "../../../src/domain/queue/index.ts";
+import type {
+  CameraActionType,
+  CanvasTool,
+  FloorProjector,
+  GridStepMeters,
+  InteractionMode,
+  AreaWallDistances
+} from "../../../contracts/scene-viewer.ts";
+import {
+  createQueueHistory,
+  executeQueueCommand,
+  getQueueStats,
+  redoQueue,
+  undoQueue,
+  validateQueueScene
+} from "../../../src/domain/queue/index.ts";
 import { queueErrorsForUser } from "../lib/queue-errors";
 import { ScenePreview } from "./scene-preview";
+import { UndoRedoBar } from "./undo-redo-bar";
+import {
+  ArrowsOutCardinal,
+  ArrowsClockwise,
+  Plus,
+  Trash,
+  Check,
+  X,
+  Compass,
+  HandPointing,
+  Selection,
+  SlidersHorizontal,
+  Info,
+  WarningOctagon
+} from "@phosphor-icons/react/dist/ssr";
 
-type QueueTool = "post" | "belt" | "people";
-type QueueStage = "areas" | "queue";
 type EditorMode = "create" | "edit";
 type Props = {
   initialScene: ProjectScene;
   mode: EditorMode;
   onSceneChange: (scene: ProjectScene) => void;
-  onEnvironmentChangePending?: (pending: boolean) => void;
   onBack?: () => void;
   onContinue?: (scene: ProjectScene) => void;
   onSave?: (scene: ProjectScene) => void | Promise<void>;
 };
-type DraftVertex = { id: string; x: string; z: string };
+type AreaDraft = { start: PointXZ; end: PointXZ };
 
-function parseMeters(value: string): number | null {
-  if (!value.trim()) return null;
-  const number = Number(value.trim().replace(",", "."));
-  return Number.isFinite(number) ? number : null;
+function newId(prefix: string): string { return `${prefix}-${crypto.randomUUID()}`; }
+function formatMeters(value: number): string { return new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 }).format(value); }
+function makeAreaVertices(start: PointXZ, end: PointXZ): Vertex[] {
+  const minX = Math.min(start.x, end.x); const maxX = Math.max(start.x, end.x);
+  const minZ = Math.min(start.z, end.z); const maxZ = Math.max(start.z, end.z);
+  return [
+    { id: newId("vertex"), x: minX, z: minZ }, { id: newId("vertex"), x: maxX, z: minZ },
+    { id: newId("vertex"), x: maxX, z: maxZ }, { id: newId("vertex"), x: minX, z: maxZ },
+  ];
 }
 
-function formatMeters(value: number): string {
-  return new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 }).format(value);
+function ItemThumbnail({ kind }: { kind: "post" | "person" | "belt" | "area" }) {
+  if (kind === "post") {
+    return (
+      <svg viewBox="0 0 48 48" aria-hidden="true" className="icon-thumb">
+        <ellipse cx="24" cy="37" rx="9" ry="3" fill="none" stroke="currentColor" strokeWidth="2" />
+        <path d="M24 8v28M20 11h8M20 17h8" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+        <circle cx="24" cy="8" r="3" fill="currentColor" />
+      </svg>
+    );
+  }
+  if (kind === "person") {
+    return (
+      <svg viewBox="0 0 48 48" aria-hidden="true" className="icon-thumb">
+        <circle cx="24" cy="10" r="5" fill="currentColor" />
+        <path d="M24 17v17m-8-10 8-5 8 5m-8 10-6 9m6-9 6 9" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  if (kind === "belt") {
+    return (
+      <svg viewBox="0 0 48 48" aria-hidden="true" className="icon-thumb">
+        <path d="M10 14v22M38 14v22M10 24h28" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+        <circle cx="10" cy="14" r="4" fill="currentColor" />
+        <circle cx="38" cy="14" r="4" fill="currentColor" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 48 48" aria-hidden="true" className="icon-thumb">
+      <path d="M8 10h31v27H8z" fill="currentColor" fillOpacity=".14" stroke="currentColor" strokeWidth="2.5" strokeDasharray="4 3" />
+      <path d="M13 16h21v15H13z" fill="none" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
 }
 
-function newId(prefix: string): string {
-  return `${prefix}-${crypto.randomUUID()}`;
-}
-
-function environmentGeometryKey(environment: ProjectScene["environment"]): string {
-  return JSON.stringify({
-    perimeter: environment.perimeter.map(({ x, z }) => [x, z]),
-    wallHeightMeters: environment.wallHeightMeters,
-  });
-}
-
-export function sameEnvironmentGeometry(first: ProjectScene["environment"], second: ProjectScene["environment"]): boolean {
-  return environmentGeometryKey(first) === environmentGeometryKey(second);
-}
-
-export function QueueEditor({ initialScene, mode, onSceneChange, onEnvironmentChangePending, onBack, onContinue, onSave }: Props) {
+export function QueueEditor({ initialScene, mode, onSceneChange, onBack, onContinue, onSave }: Props) {
   const [history, setHistory] = useState<QueueHistory>(() => createQueueHistory(initialScene));
-  const [stage, setStage] = useState<QueueStage>("areas");
-  const [tool, setTool] = useState<QueueTool>("post");
+  const [tool, setTool] = useState<CanvasTool>("post");
+  const [interactionMode, setInteractionMode] = useState<InteractionMode>("edit");
+  const [gridStep, setGridStep] = useState<GridStepMeters>(0.25);
+  const [compactLayout, setCompactLayout] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [view, setView] = useState<"top" | "perspective">("top");
   const [selection, setSelection] = useState<EditorSelection | null>(null);
+  const [pendingBelt, setPendingBelt] = useState<{ fromPostId: string; toPostId?: string } | null>(null);
+  const [areaDraft, setAreaDraft] = useState<AreaDraft | null>(null);
+  const [areaName, setAreaName] = useState("Área restrita");
+  const [areaDistances, setAreaDistances] = useState<AreaWallDistances | null>(null);
+  const [projector, setProjector] = useState<FloorProjector | null>(null);
+  const [placementPreview, setPlacementPreview] = useState<{ kind: "post" | "person"; point: PointXZ } | null>(null);
+  const [moveSelectedMode, setMoveSelectedMode] = useState(false);
+  const [cameraAction, setCameraAction] = useState<{ id: number; type: CameraActionType }>();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const cameraActionId = useRef(0);
+  const palettePointer = useRef<{ pointerId: number; kind: "post" | "person"; x: number; y: number; moved: boolean } | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
   const scene = history.present;
-  const environmentChanged = environmentGeometryKey(scene.environment) !== environmentGeometryKey(initialScene.environment);
   const validation = useMemo(() => validateQueueScene(scene), [scene]);
   const stats = useMemo(() => getQueueStats(scene), [scene]);
   const selectedPost = selection?.kind === "post" ? scene.posts.find((post) => post.id === selection.id) : undefined;
+  const selectedPerson = selection?.kind === "person" ? scene.people.find((person) => person.id === selection.id) : undefined;
   const selectedArea = selection?.kind === "area" ? scene.restrictedAreas.find((area) => area.id === selection.id) : undefined;
+  const selectedBelt = selection?.kind === "belt" ? scene.belts.find((belt) => belt.id === selection.id) : undefined;
+  const showInspector = !compactLayout || inspectorOpen;
 
   useEffect(() => {
-    onEnvironmentChangePending?.(environmentChanged);
-    if (!environmentChanged) onSceneChange(scene);
-  }, [environmentChanged, onEnvironmentChangePending, onSceneChange, scene]);
+    const query = window.matchMedia("(max-width: 760px)");
+    const update = () => setCompactLayout(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
 
-  function run(command: QueueCommand, successMessage?: string): boolean {
-    if (environmentChanged) {
-      setError("As medidas mudaram. Confirme o descarte da montagem anterior antes de aplicar alterações.");
-      return false;
-    }
+  // Reseta confirmação de exclusão ao trocar seleção
+  useEffect(() => {
+    setConfirmDelete(false);
+    setMoveSelectedMode(false);
+  }, [selection]);
+
+  const run = useCallback((command: QueueCommand, successText?: string): boolean => {
     const result = executeQueueCommand(history, command);
     if (!result.valid) {
-      setError(queueErrorsForUser(result.errors, "Esta alteração não pode ser aplicada.").join(" ") || "Esta alteração não pode ser aplicada.");
+      setError(queueErrorsForUser(result.errors, "Não foi possível aplicar essa alteração. Confira o espaço livre e tente novamente.").join(" "));
       setMessage("");
       return false;
     }
     if (result.history.present === history.present) {
-      setError("Esta alteração não mudou a planta.");
+      setError("A alteração não mudou a planta.");
       setMessage("");
       return false;
     }
     setHistory(result.history);
     setError("");
-    setMessage(successMessage ?? "Alteração aplicada.");
+    setMessage(successText ?? "Alteração aplicada.");
+    onSceneChange(result.history.present);
     return true;
+  }, [history, onSceneChange]);
+
+  const placePost = useCallback((point: PointXZ) => {
+    const post: Stanchion = { id: newId("post"), position: point, heightMeters: 0.95, baseRadiusMeters: 0.08 };
+    if (run({ type: "post:add", post }, "Poste adicionado.")) {
+      setSelection({ kind: "post", id: post.id });
+      setInspectorOpen(true);
+    }
+  }, [run]);
+
+  const placePerson = useCallback((point: PointXZ) => {
+    // Onda 3: primeira pessoa define início/orientação (+Z, yaw: 0). Seguintes entram via +1.
+    if (scene.people.length > 0) {
+      // Se já existem pessoas, incentiva a adicionar via cadeia +1 atrás da última
+      const lastPerson = scene.people[scene.people.length - 1];
+      const newPersonId = newId("person");
+      if (run({ type: "person:append", sourceId: lastPerson.id, id: newPersonId }, "Pessoa adicionada ao final da fila.")) {
+        setSelection({ kind: "person", id: newPersonId });
+        setInspectorOpen(true);
+      }
+      return;
+    }
+    const person: PersonPlacement = {
+      id: newId("person"),
+      routeId: null,
+      distanceAlongRouteMeters: null,
+      position: point,
+      yawRadians: 0,
+    };
+    if (run({ type: "person:add", person }, "Início da fila definido. Use +1 atrás para continuar a fila.")) {
+      setSelection({ kind: "person", id: person.id });
+      setInspectorOpen(true);
+    }
+  }, [run, scene.people]);
+
+  const handleFloorPoint = useCallback((point: PointXZ) => {
+    if (interactionMode === "navigate") return;
+
+    if (moveSelectedMode && selectedPost) {
+      run({ type: "post:move", id: selectedPost.id, position: point }, "Poste movido.");
+      setMoveSelectedMode(false);
+      return;
+    }
+    if (moveSelectedMode && selectedPerson) {
+      run({ type: "person:move", id: selectedPerson.id, position: point }, "Pessoa movida.");
+      setMoveSelectedMode(false);
+      return;
+    }
+    if (tool === "post") placePost(point);
+    else if (tool === "person") placePerson(point);
+  }, [interactionMode, moveSelectedMode, placePerson, placePost, run, selectedPerson, selectedPost, tool]);
+
+  const handleSelect = useCallback((next: EditorSelection | null) => {
+    setSelection(next);
+    if (next) setInspectorOpen(true);
+    if (tool === "belt" && next?.kind === "post") {
+      if (!pendingBelt) {
+        setPendingBelt({ fromPostId: next.id });
+        setMessage("Primeiro poste selecionado. Toque no segundo poste.");
+      } else if (!pendingBelt.toPostId && pendingBelt.fromPostId !== next.id) {
+        setPendingBelt({ ...pendingBelt, toPostId: next.id });
+        setMessage("Dois postes selecionados. Conecte ou cancele.");
+      } else if (pendingBelt.fromPostId === next.id) {
+        setPendingBelt(null);
+        setMessage("Seleção cancelada.");
+      } else {
+        setPendingBelt({ fromPostId: next.id });
+        setMessage("Par reiniciado. Toque no segundo poste.");
+      }
+    }
+    setError("");
+  }, [pendingBelt, tool]);
+
+  const handleMove = useCallback((entity: EditorSelection, delta: PointXZ) => {
+    if (entity.kind === "post") {
+      const item = scene.posts.find((post) => post.id === entity.id);
+      if (item) run({ type: "post:move", id: item.id, position: { x: item.position.x + delta.x, z: item.position.z + delta.z } }, "Poste movido.");
+      return;
+    }
+    if (entity.kind === "person") {
+      const item = scene.people.find((person) => person.id === entity.id);
+      if (item) run({ type: "person:move", id: item.id, position: { x: item.position.x + delta.x, z: item.position.z + delta.z } }, "Pessoa movida.");
+      return;
+    }
+    if (entity.kind === "area") {
+      const item = scene.restrictedAreas.find((area) => area.id === entity.id);
+      if (item) run({ type: "area:update", area: { ...item, vertices: item.vertices.map((vertex) => ({ ...vertex, x: vertex.x + delta.x, z: vertex.z + delta.z })) } }, "Área movida.");
+    }
+  }, [run, scene]);
+
+  const registerProjector = useCallback((next: FloorProjector | null) => setProjector(() => next), []);
+  const onAreaDraw = useCallback((start: PointXZ, end: PointXZ) => {
+    setAreaDraft({ start, end });
+    setTool("area");
+    setInspectorOpen(true);
+    setError("");
+  }, []);
+
+  const areaPreview = useMemo(() => areaDraft ? [
+    { x: areaDraft.start.x, z: areaDraft.start.z }, { x: areaDraft.end.x, z: areaDraft.start.z },
+    { x: areaDraft.end.x, z: areaDraft.end.z }, { x: areaDraft.start.x, z: areaDraft.end.z },
+  ] : null, [areaDraft]);
+
+  function confirmArea() {
+    if (!areaDraft) return;
+    const area: RestrictedArea = { id: newId("area"), name: areaName.trim() || "Área restrita", vertices: makeAreaVertices(areaDraft.start, areaDraft.end) };
+    if (run({ type: "area:add", area }, "Área adicionada.")) {
+      setAreaDraft(null);
+      setAreaName("Área restrita");
+    }
+  }
+
+  function connectBelt() {
+    if (!pendingBelt?.toPostId) return;
+    const belt: Belt = { id: newId("belt"), fromPostId: pendingBelt.fromPostId, toPostId: pendingBelt.toPostId, heightMeters: 0.86 };
+    if (run({ type: "belt:add", belt }, "Fita conectada.")) setPendingBelt(null);
+  }
+
+  function appendPerson(person: PersonPlacement) {
+    const id = newId("person");
+    if (run({ type: "person:append", sourceId: person.id, id }, "Mais uma pessoa conectada atrás na cadeia.")) {
+      setSelection({ kind: "person", id });
+      setInspectorOpen(true);
+    }
+  }
+
+  function handlePerimeterVertexMove(id: string, position: PointXZ) {
+    run({ type: "environment:vertex-move", id, position }, "Canto ajustado. Confirme a planta antes de salvar.");
+  }
+
+  function confirmEnvironment() {
+    run({ type: "environment:confirm", confirmedAt: new Date().toISOString() }, "Planta confirmada.");
+  }
+
+  function sendCameraAction(type: CameraActionType) {
+    cameraActionId.current += 1;
+    setCameraAction({ id: cameraActionId.current, type });
+  }
+
+  function onPalettePointerDown(event: ReactPointerEvent<HTMLButtonElement>, kind: "post" | "person") {
+    setTool(kind);
+    setInteractionMode("edit");
+    palettePointer.current = { pointerId: event.pointerId, kind, x: event.clientX, y: event.clientY, moved: false };
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* pointer fallback */ }
+  }
+
+  function onPalettePointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
+    const active = palettePointer.current;
+    if (!active || active.pointerId !== event.pointerId) return;
+    if (Math.hypot(event.clientX - active.x, event.clientY - active.y) > 8) active.moved = true;
+    if (active.moved) setPlacementPreview(projector?.(event.clientX, event.clientY) ? { kind: active.kind, point: projector(event.clientX, event.clientY)! } : null);
+  }
+
+  function onPalettePointerUp(event: ReactPointerEvent<HTMLButtonElement>) {
+    const active = palettePointer.current;
+    if (!active || active.pointerId !== event.pointerId) return;
+    const point = active.moved ? projector?.(event.clientX, event.clientY) ?? null : null;
+    palettePointer.current = null;
+    setPlacementPreview(null);
+    if (point) {
+      if (active.kind === "post") placePost(point);
+      else placePerson(point);
+    } else {
+      setTool(active.kind);
+    }
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* pointer fallback */ }
+  }
+
+  function cancelPalettePointer(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (palettePointer.current?.pointerId !== event.pointerId) return;
+    palettePointer.current = null;
+    setPlacementPreview(null);
   }
 
   function undo() {
-    if (!history.past.length) return;
-    setHistory(undoQueue(history));
-    setSelection(null);
-    setError("");
-    setMessage("Última alteração desfeita.");
+    if (history.past.length) {
+      const next = undoQueue(history);
+      setHistory(next);
+      onSceneChange(next.present);
+      setSelection(null);
+      setError("");
+      setMessage("Última alteração desfeita.");
+    }
   }
 
   function redo() {
-    if (!history.future.length) return;
-    setHistory(redoQueue(history));
+    if (history.future.length) {
+      const next = redoQueue(history);
+      setHistory(next);
+      onSceneChange(next.present);
+      setSelection(null);
+      setError("");
+      setMessage("Alteração refeita.");
+    }
+  }
+
+  function removeSelection() {
+    if (!selection) return;
+    if (selection.kind === "post") run({ type: "post:remove", id: selection.id }, "Poste removido junto com as fitas conectadas.");
+    else if (selection.kind === "person") run({ type: "person:remove", id: selection.id }, "Pessoa removida.");
+    else if (selection.kind === "belt") run({ type: "belt:remove", id: selection.id }, "Fita removida.");
+    else if (selection.kind === "area") run({ type: "area:remove", id: selection.id }, "Área removida.");
+    else if (selection.kind === "route") run({ type: "route:remove", id: selection.id }, "Percurso removido.");
     setSelection(null);
-    setError("");
-    setMessage("Alteração refeita.");
+    setConfirmDelete(false);
   }
 
-  function handleSelect(next: EditorSelection | null) {
-    setSelection(next);
-    if (next?.kind === "post" && tool === "belt") {
-      if (!fromPost) {
-        setFromPost(next.id); setToPost(""); setMessage("Primeiro poste escolhido. Clique em outro poste para completar o par.");
-      } else if (fromPost === next.id && !toPost) {
-        setFromPost(""); setToPost(""); setMessage("Seleção limpa. Clique no primeiro poste para começar de novo.");
-      } else if (toPost) {
-        setFromPost(next.id); setToPost(""); setMessage("Par reiniciado. Clique em outro poste para escolher o segundo.");
-      } else {
-        setToPost(next.id); setMessage("Par escolhido. Confirme a conexão com fita.");
-      }
-    }
-    setError("");
-  }
-
-  const [postX, setPostX] = useState("");
-  const [postZ, setPostZ] = useState("");
-  const [fromPost, setFromPost] = useState("");
-  const [toPost, setToPost] = useState("");
-  const [routeDraft, setRouteDraft] = useState<Vertex[]>([]);
-  const [routeX, setRouteX] = useState("");
-  const [routeZ, setRouteZ] = useState("");
-  const [areaKind, setAreaKind] = useState<"rectangle" | "polygon">("rectangle");
-  const [areaName, setAreaName] = useState("");
-  const [areaX, setAreaX] = useState("");
-  const [areaZ, setAreaZ] = useState("");
-  const [areaWidth, setAreaWidth] = useState("");
-  const [areaDepth, setAreaDepth] = useState("");
-  const [areaDraft, setAreaDraft] = useState<DraftVertex[]>([]);
-  const [newAreaDraft, setNewAreaDraft] = useState<DraftVertex[]>([]);
-  const [areaVertexX, setAreaVertexX] = useState("");
-  const [areaVertexZ, setAreaVertexZ] = useState("");
-
-  function discardAssemblyForNewEnvironment() {
-    const resetScene: ProjectScene = {
-      ...initialScene,
-      restrictedAreas: [], posts: [], belts: [], routes: [], people: [],
-    };
-    setHistory(createQueueHistory(resetScene));
-    setSelection(null); setRouteDraft([]); setAreaDraft([]); setNewAreaDraft([]);
-    setPostX(""); setPostZ(""); setFromPost(""); setToPost("");
-    setRouteX(""); setRouteZ(""); setAreaVertexX(""); setAreaVertexZ("");
-    setAreaName(""); setAreaX(""); setAreaZ(""); setAreaWidth(""); setAreaDepth("");
-    setStage("areas"); setError("");
-    setMessage("A montagem anterior foi descartada. As áreas e a fila agora usam as novas medidas.");
-    onEnvironmentChangePending?.(false);
-  }
-
-  const queueRoute = scene.routes[0];
-  const peopleOnRoute = queueRoute ? scene.people.filter((person) => person.routeId === queueRoute.id) : [];
-
-  function addPost(position: PointXZ) {
-    const post: Stanchion = { id: newId("post"), position, heightMeters: 0.95, baseRadiusMeters: 0.16 };
-    run({ type: "post:add", post }, "Poste adicionado.");
-  }
-
-  function addPostByCoordinates(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const x = parseMeters(postX);
-    const z = parseMeters(postZ);
-    if (x === null || z === null) { setError("Informe as duas posições do poste em metros."); return; }
-    if (run({ type: "post:add", post: { id: newId("post"), position: { x, z }, heightMeters: 0.95, baseRadiusMeters: 0.16 } }, "Poste adicionado.")) {
-      setPostX(""); setPostZ("");
-    }
-  }
-
-  function moveSelectedPost(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!selectedPost) return;
-    const x = parseMeters(postX);
-    const z = parseMeters(postZ);
-    if (x === null || z === null) { setError("Informe as duas posições do poste em metros."); return; }
-    if (run({ type: "post:move", id: selectedPost.id, position: { x, z } }, "Posição do poste atualizada.")) {
-      setPostX(""); setPostZ("");
-    }
-  }
-
-  function addBelt() {
-    if (!fromPost || !toPost || fromPost === toPost) { setError("Escolha dois postes diferentes para ligar com a fita."); return; }
-    const belt: Belt = { id: newId("belt"), fromPostId: fromPost, toPostId: toPost, heightMeters: 0.86 };
-    if (run({ type: "belt:add", belt }, "Fita ligada aos dois postes.")) { setFromPost(""); setToPost(""); }
-  }
-
-  function addRoutePoint(point: PointXZ) {
-    if (environmentChanged) { setError("As medidas mudaram. Descarte a montagem anterior para continuar."); return; }
-    setRouteDraft((current) => [...current, { id: newId("route-point"), ...point }]);
-    setMessage("Ponto incluído no rascunho do percurso.");
-    setError("");
-  }
-
-  function addRoutePointByCoordinates(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (environmentChanged) { setError("As medidas mudaram. Descarte a montagem anterior para continuar."); return; }
-    const x = parseMeters(routeX);
-    const z = parseMeters(routeZ);
-    if (x === null || z === null) { setError("Informe as duas posições do percurso em metros."); return; }
-    addRoutePoint({ x, z }); setRouteX(""); setRouteZ("");
-  }
-
-  function confirmRoute() {
-    if (scene.routes.length > 0) { setError("Remova o percurso atual antes de confirmar outro."); return; }
-    if (routeDraft.length < 2) { setError("Inclua pelo menos dois pontos para confirmar o percurso."); return; }
-    const route: QueueRoute = { id: newId("route"), points: routeDraft };
-    if (run({ type: "route:set", route }, "Percurso confirmado.")) setRouteDraft([]);
-  }
-
-  function handleFloorPoint(point: PointXZ) {
-    if (stage !== "queue") return;
-    if (environmentChanged) { setError("As medidas mudaram. Descarte a montagem anterior para continuar."); return; }
-    if (tool === "post") addPost(point);
-    if (tool === "people") addRoutePoint(point);
-  }
-
-  function handleMove(selectionToMove: EditorSelection, delta: PointXZ) {
-    if (selectionToMove.kind === "post") {
-      const post = scene.posts.find((candidate) => candidate.id === selectionToMove.id);
-      if (post) run({ type: "post:move", id: post.id, position: { x: post.position.x + delta.x, z: post.position.z + delta.z } }, "Poste reposicionado.");
-      return;
-    }
-    if (selectionToMove.kind === "area") {
-      const area = scene.restrictedAreas.find((candidate) => candidate.id === selectionToMove.id);
-      if (area) run({ type: "area:update", area: { ...area, vertices: area.vertices.map((vertex) => ({ ...vertex, x: vertex.x + delta.x, z: vertex.z + delta.z })) } }, "Área reposicionada.");
-      return;
-    }
-    setError("Esta peça não pode ser movida diretamente. Use as opções de edição disponíveis.");
-  }
-
-  function createArea() {
-    const name = areaName.trim() || `Área ${scene.restrictedAreas.length + 1}`;
-    let vertices: Vertex[];
-    if (areaKind === "rectangle") {
-      const x = parseMeters(areaX); const z = parseMeters(areaZ);
-      const width = parseMeters(areaWidth); const depth = parseMeters(areaDepth);
-      if (x === null || z === null || width === null || depth === null || width <= 0 || depth <= 0) {
-        setError("Informe a posição, largura e profundidade positivas da área, em metros."); return;
-      }
-      vertices = [
-        { id: newId("area-point"), x, z },
-        { id: newId("area-point"), x: x + width, z },
-        { id: newId("area-point"), x: x + width, z: z + depth },
-        { id: newId("area-point"), x, z: z + depth },
-      ];
-    } else {
-      vertices = newAreaDraft.map(({ id, x, z }) => ({ id, x: Number(x), z: Number(z) }));
-      if (vertices.length < 3 || vertices.some((vertex) => !Number.isFinite(vertex.x) || !Number.isFinite(vertex.z))) {
-        setError("Inclua pelo menos três pontos válidos para desenhar a área."); return;
-      }
-    }
-    const area: RestrictedArea = { id: newId("area"), name, vertices };
-    if (run({ type: "area:add", area }, "Área restrita adicionada.")) {
-      setAreaName(""); setNewAreaDraft([]); setSelection({ kind: "area", id: area.id });
-      setAreaX(""); setAreaZ(""); setAreaWidth(""); setAreaDepth("");
-    }
-  }
-
-  useEffect(() => {
-    if (selectedArea) setAreaDraft(selectedArea.vertices.map((vertex) => ({ id: vertex.id, x: String(vertex.x), z: String(vertex.z) })));
-    else setAreaDraft([]);
-  }, [selectedArea]);
-
-  function addAreaVertex(event: FormEvent<HTMLFormElement>, destination: "new" | "selected" = "new") {
-    event.preventDefault();
-    const x = parseMeters(areaVertexX); const z = parseMeters(areaVertexZ);
-    if (x === null || z === null) { setError("Informe as duas posições do ponto em metros."); return; }
-    const point = { id: newId("area-point"), x: String(x), z: String(z) };
-    if (destination === "selected") setAreaDraft((current) => [...current, point]);
-    else setNewAreaDraft((current) => [...current, point]);
-    setAreaVertexX(""); setAreaVertexZ(""); setError("");
-  }
-
-  function saveAreaDraft() {
-    if (!selectedArea) return;
-    const vertices: Vertex[] = [];
-    for (const vertex of areaDraft) {
-      const x = parseMeters(vertex.x); const z = parseMeters(vertex.z);
-      if (x === null || z === null) { setError("Revise as posições dos pontos da área antes de aplicar."); return; }
-      vertices.push({ id: vertex.id, x, z });
-    }
-    run({ type: "area:update", area: { ...selectedArea, vertices } }, "Área atualizada.");
-  }
-
-  function removeSelected() {
-    if (!selection) { setError("Selecione um poste, fita, percurso ou pessoa primeiro."); return; }
-    if (selection.kind === "area") { setError("Edite ou remova áreas na etapa anterior à montagem da fila."); return; }
-    const labels = { post: "Poste removido junto com as fitas ligadas a ele.", belt: "Fita removida.", route: "Percurso e pessoas removidos.", person: "Pessoa removida." };
-    const command: QueueCommand = selection.kind === "post"
-      ? { type: "post:remove", id: selection.id }
-      : selection.kind === "belt" ? { type: "belt:remove", id: selection.id }
-        : selection.kind === "route" ? { type: "route:remove", id: selection.id }
-          : { type: "person:remove", id: selection.id };
-    if (run(command, labels[selection.kind])) setSelection(null);
-  }
-
-  function changeSpacing(value: string) {
-    if (environmentChanged) { setError("As medidas mudaram. Descarte a montagem anterior para continuar."); return; }
-    if (scene.simulation.spacingMeters === Number(value)) return;
-    const oldCount = stats.peopleCount;
+  function updateSpacing(value: string) {
     const spacingMeters = Number(value);
-    const result = executeQueueCommand(history, { type: "simulation:spacing", spacingMeters });
-    if (!result.valid || result.history.present === history.present) {
-      setError(queueErrorsForUser(result.errors, "Este espaçamento não altera a fila.").join(" ") || "Este espaçamento não altera a fila."); setMessage(""); return;
-    }
-    const nextCount = getQueueStats(result.history.present).peopleCount;
-    setHistory(result.history); setError(""); setMessage(nextCount < oldCount
-      ? `Espaçamento atualizado. A quantidade foi reduzida de ${oldCount} para ${nextCount} para caber no percurso.`
-      : "Espaçamento atualizado.");
+    if (spacingMeters === scene.simulation.spacingMeters) return;
+    run({ type: "simulation:spacing", spacingMeters }, "Espaçamento atualizado na cadeia.");
   }
 
-  async function saveOrContinue() {
-    if (environmentChanged) { setError("O ambiente mudou. Confirme o descarte da montagem anterior antes de continuar."); return; }
-    if (!validation.valid) { setError(queueErrorsForUser(validation.errors, "Confira os itens da fila antes de continuar.").join(" ") || "Corrija os itens marcados antes de continuar."); return; }
+  async function continueOrSave() {
+    if (!scene.environment.confirmedAt) {
+      setError("Ajuste e confirme a planta antes de continuar.");
+      setTool("perimeter");
+      return;
+    }
+    if (!validation.valid) {
+      setError(queueErrorsForUser(validation.errors, "Revise os itens destacados antes de continuar.").join(" "));
+      return;
+    }
     setSaving(true);
+    setError("");
     try {
       if (mode === "edit") await onSave?.(scene);
       else onContinue?.(scene);
-    } finally { setSaving(false); }
+    } finally {
+      setSaving(false);
+    }
   }
 
-  const postCoordinateForm = (
-    <form className="queue-coordinate-form" onSubmit={selectedPost ? moveSelectedPost : addPostByCoordinates}>
-      <label>{selectedPost ? "Nova posição X (m)" : "Posição X (m)"}<input value={postX} onChange={(event) => setPostX(event.target.value)} placeholder={selectedPost ? formatMeters(selectedPost.position.x) : "0"} inputMode="decimal" /></label>
-      <label>{selectedPost ? "Nova posição Z (m)" : "Posição Z (m)"}<input value={postZ} onChange={(event) => setPostZ(event.target.value)} placeholder={selectedPost ? formatMeters(selectedPost.position.z) : "0"} inputMode="decimal" /></label>
-      <button className="button-secondary" type="submit">{selectedPost ? "Mover poste" : "Adicionar poste"}</button>
-    </form>
+  const sceneElement = (
+    <div className="scene-frame-container" style={{ position: "relative", width: "100%", height: "100%" }}>
+      <ScenePreview
+        scene={scene}
+        view={view}
+        selection={selection}
+        interactionMode={interactionMode}
+        gridStep={gridStep}
+        onSelectEntity={handleSelect}
+        onMoveEntity={handleMove}
+        onFloorPoint={handleFloorPoint}
+        tool={tool}
+        cameraAction={cameraAction}
+        onRegisterFloorProjector={registerProjector}
+        placementPreview={placementPreview}
+        draftArea={areaPreview}
+        draftBelt={pendingBelt?.toPostId ? { fromPostId: pendingBelt.fromPostId, toPostId: pendingBelt.toPostId } : null}
+        onAreaDraw={onAreaDraw}
+        onMovePerimeterVertex={handlePerimeterVertexMove}
+        onAreaDistancesChange={setAreaDistances}
+        onAppendPerson={(id) => {
+          const person = scene.people.find((item) => item.id === id);
+          if (person) appendPerson(person);
+        }}
+        showWalls={false}
+      />
+      <UndoRedoBar
+        canUndo={history.past.length > 0}
+        canRedo={history.future.length > 0}
+        changeCount={history.past.length}
+        onUndo={undo}
+        onRedo={redo}
+      />
+    </div>
   );
 
   return (
-    <section className="queue-editor" aria-labelledby="queue-editor-title">
-      <div className="queue-editor-heading">
-        <div><p className="stage-kicker">{stage === "areas" ? "ETAPA ANTES DA FILA" : "MONTAGEM DA FILA"}</p>
-          <h1 id="queue-editor-title">{stage === "areas" ? <>Marque os espaços <em>restritos.</em></> : <>Monte a fila <em>no ambiente.</em></>}</h1>
-          <p>{stage === "areas" ? "Zonas como pilares ou móveis impedem a passagem. Se não houver áreas restritas, você pode continuar sem elas." : "Adicione postes, conecte fitas e desenhe o percurso das pessoas. Todas as posições usam metros."}</p>
-        </div>
-        {stage === "queue" && <div className="view-switch" role="group" aria-label="Ângulo da visualização">
-          <button type="button" className={view === "top" ? "selected" : ""} onClick={() => setView("top")}>Planta</button>
-          <button type="button" className={view === "perspective" ? "selected" : ""} onClick={() => setView("perspective")}>Perspectiva</button>
-        </div>}
-      </div>
-
-      {environmentChanged && <div className="queue-environment-warning" role="alert">
-        <p>As medidas do ambiente mudaram. A montagem anterior não corresponde às novas medidas. Você pode voltar e restaurar as medidas antigas, ou descartar áreas, postes, fitas, percurso e pessoas para começar com o ambiente atualizado.</p>
-        <button className="queue-danger-button" type="button" onClick={discardAssemblyForNewEnvironment}>Descartar montagem e usar as novas medidas</button>
-      </div>}
-
-      {stage === "areas" ? (
-        <div className="area-stage">
-          <div className="area-editor-panel">
-            <div className="queue-panel-heading"><span>01</span><h2>Adicionar área restrita</h2></div>
-            <div className="area-create-form">
-              <label>Nome da área<input value={areaName} maxLength={80} onChange={(event) => setAreaName(event.target.value)} placeholder="Ex.: Pilar central" /></label>
-              <div className="entry-switch" role="group" aria-label="Forma da área">
-                <button type="button" className={areaKind === "rectangle" ? "entry-option selected" : "entry-option"} onClick={() => setAreaKind("rectangle")}>Retângulo</button>
-                <button type="button" className={areaKind === "polygon" ? "entry-option selected" : "entry-option"} onClick={() => setAreaKind("polygon")}>Polígono</button>
-              </div>
-              {areaKind === "rectangle" ? <div className="queue-coordinate-form">
-                <label>Posição X (m)<input value={areaX} onChange={(event) => setAreaX(event.target.value)} inputMode="decimal" /></label>
-                <label>Posição Z (m)<input value={areaZ} onChange={(event) => setAreaZ(event.target.value)} inputMode="decimal" /></label>
-                <label>Largura (m)<input value={areaWidth} onChange={(event) => setAreaWidth(event.target.value)} inputMode="decimal" /></label>
-                <label>Profundidade (m)<input value={areaDepth} onChange={(event) => setAreaDepth(event.target.value)} inputMode="decimal" /></label>
-              </div> : <>
-                <p className="measurement-note">Inclua os pontos em metros na ordem ao redor da área; o último fecha no primeiro.</p>
-                <form className="queue-coordinate-form" onSubmit={(event) => addAreaVertex(event, "new")}>
-                  <label>Posição X (m)<input value={areaVertexX} onChange={(event) => setAreaVertexX(event.target.value)} inputMode="decimal" /></label>
-                  <label>Posição Z (m)<input value={areaVertexZ} onChange={(event) => setAreaVertexZ(event.target.value)} inputMode="decimal" /></label>
-                  <button className="button-secondary" type="submit">Incluir ponto</button>
-                </form>
-                <ol className="queue-draft-list">{newAreaDraft.map((vertex, index) => <li key={vertex.id}>Ponto {index + 1}: X {vertex.x} m · Z {vertex.z} m</li>)}</ol>
-              </>}
-              <button className="button-primary" type="button" onClick={createArea}>Adicionar área</button>
-            </div>
-          </div>
-
-          <div className="area-editor-panel">
-            <div className="queue-panel-heading"><span>02</span><h2>Áreas registradas</h2></div>
-            {scene.restrictedAreas.length === 0 ? <p className="measurement-note">Nenhuma área restrita adicionada.</p> : <ul className="queue-entity-list">
-              {scene.restrictedAreas.map((area) => <li key={area.id}>
-                <button type="button" className={selectedArea?.id === area.id ? "queue-entity selected" : "queue-entity"} onClick={() => setSelection({ kind: "area", id: area.id })}>
-                  <span>{area.name}</span><small>{area.vertices.length} pontos</small>
-                </button>
-              </li>)}
-            </ul>}
-            {selectedArea && <div className="selected-area-form">
-              <h3>Editar forma de {selectedArea.name}</h3>
-              {areaDraft.map((vertex, index) => <div className="area-vertex-edit" key={vertex.id}>
-                <span>Ponto {index + 1}</span>
-                <label>X (m)<input value={vertex.x} inputMode="decimal" onChange={(event) => setAreaDraft((draft) => draft.map((item) => item.id === vertex.id ? { ...item, x: event.target.value } : item))} /></label>
-                <label>Z (m)<input value={vertex.z} inputMode="decimal" onChange={(event) => setAreaDraft((draft) => draft.map((item) => item.id === vertex.id ? { ...item, z: event.target.value } : item))} /></label>
-                <button className="queue-icon-button" type="button" aria-label={`Remover ponto ${index + 1}`} onClick={() => setAreaDraft((draft) => draft.filter((item) => item.id !== vertex.id))}>Remover ponto</button>
-              </div>)}
-              <form className="queue-coordinate-form" onSubmit={(event) => addAreaVertex(event, "selected")}>
-                <label>Novo X (m)<input value={areaVertexX} onChange={(event) => setAreaVertexX(event.target.value)} inputMode="decimal" /></label>
-                <label>Novo Z (m)<input value={areaVertexZ} onChange={(event) => setAreaVertexZ(event.target.value)} inputMode="decimal" /></label>
-                <button className="button-secondary" type="submit">Incluir ponto</button>
-              </form>
-              <div className="queue-inline-actions"><button className="button-secondary" type="button" onClick={saveAreaDraft}>Aplicar forma</button>
-                <button className="queue-danger-button" type="button" onClick={() => { if (run({ type: "area:remove", id: selectedArea.id }, "Área removida.")) setSelection(null); }}>Remover área</button></div>
-            </div>}
-          </div>
-          <div className="area-stage-preview"><ScenePreview scene={scene} view="top" selection={selection} onSelectEntity={handleSelect} onMoveEntity={handleMove} /></div>
-          {error && <p className="queue-error" role="alert">{error}</p>}
-          {message && <p className="queue-message" role="status">{message}</p>}
-          <div className="stage-footer area-stage-footer">
-            {onBack ? <button className="button-quiet" type="button" onClick={onBack}>Voltar à planta</button> : <span />}
-            <div><button className="button-primary" type="button" disabled={environmentChanged} onClick={() => { setStage("queue"); setError(""); }}>
-              {scene.restrictedAreas.length ? "Continuar com áreas" : "Continuar sem áreas"}
-            </button></div>
-          </div>
-        </div>
-      ) : (
-        <>
-          <div className="queue-history-bar">
-            <div><button className="button-secondary" type="button" onClick={undo} disabled={!history.past.length}>Desfazer</button>
-              <button className="button-secondary" type="button" onClick={redo} disabled={!history.future.length}>Refazer</button>
-              <span>{history.past.length} de até 100 alterações</span></div>
-            <button className="button-quiet" type="button" onClick={() => setStage("areas")}>Editar áreas restritas</button>
-          </div>
-
-          <div className="queue-tools" role="toolbar" aria-label="Ferramentas da fila">
-            <button type="button" className={tool === "post" ? "queue-tool active" : "queue-tool"} onClick={() => setTool("post")}>Poste</button>
-            <button type="button" className={tool === "belt" ? "queue-tool active" : "queue-tool"} onClick={() => setTool("belt")}>Fita</button>
-            <button type="button" className={tool === "people" ? "queue-tool active" : "queue-tool"} onClick={() => setTool("people")}>Pessoas</button>
-          </div>
-
-          <div className="queue-editor-grid">
-            <div className="queue-canvas-column">
-              <div className="viewer-toolbar"><div className="queue-instruction">{tool === "post" ? "Toque no piso para adicionar poste ou informe as posições ao lado." : tool === "belt" ? "Escolha dois postes para conectar com uma fita." : "Toque no piso para traçar o percurso ou informe pontos ao lado."}</div></div>
-              <ScenePreview scene={scene} view={view} selection={selection} onSelectEntity={handleSelect} onMoveEntity={handleMove} onFloorPoint={handleFloorPoint} />
-              <div className="queue-stats" aria-live="polite">
-                <div><span>Comprimento do percurso</span><strong>{formatMeters(stats.routeLengthMeters)} m</strong></div>
-                <div><span>Pessoas no percurso</span><strong>{stats.peopleCount}</strong></div>
-                <div><span>Capacidade estimada</span><strong>{stats.capacity}</strong></div>
-                <label>Espaçamento<select value={scene.simulation.spacingMeters} onChange={(event) => changeSpacing(event.target.value)}>
-                  <option value="0.5">0,5 m</option><option value="0.8">0,8 m</option><option value="1">1 m</option>
-                </select></label>
-              </div>
+    <section className="queue-editor visual-queue-editor" aria-label="Editor visual da fila">
+      <div className="queue-workspace">
+        <div className="queue-canvas-column">
+          <div className="queue-canvas-toolbar">
+            <div className="view-switch" role="group" aria-label="Ângulo da visualização">
+              <button
+                type="button"
+                className={view === "top" ? "selected" : ""}
+                onClick={() => setView("top")}
+              >
+                Planta
+              </button>
+              <button
+                type="button"
+                className={view === "perspective" ? "selected" : ""}
+                onClick={() => setView("perspective")}
+              >
+                Perspectiva
+              </button>
             </div>
 
-            <aside className="queue-controls">
-              {tool === "post" && <section className="queue-control-panel">
-                <div className="queue-panel-heading"><span>01</span><h2>Postes</h2></div>
-                <p>Adicione pelo piso ou defina uma posição em metros.</p>
-                {postCoordinateForm}
-                {selectedPost && <p className="measurement-note">Selecionado: X {formatMeters(selectedPost.position.x)} m · Z {formatMeters(selectedPost.position.z)} m. Também é possível arrastar na planta.</p>}
-                <ul className="queue-entity-list">{scene.posts.map((post) => <li key={post.id}>
-                  <button type="button" className={selection?.kind === "post" && selection.id === post.id ? "queue-entity selected" : "queue-entity"} onClick={() => { setSelection({ kind: "post", id: post.id }); setPostX(String(post.position.x)); setPostZ(String(post.position.z)); }}>
-                    <span>Poste {formatMeters(post.position.x)}, {formatMeters(post.position.z)} m</span><small>base {formatMeters(post.baseRadiusMeters)} m</small>
-                  </button>
-                </li>)}</ul>
-                <button className="queue-danger-button" type="button" onClick={removeSelected} disabled={selection?.kind !== "post"}>Remover poste selecionado</button>
-              </section>}
+            <div className="interaction-switch" role="group" aria-label="Modo de interação">
+              <button
+                type="button"
+                className={interactionMode === "navigate" ? "selected" : ""}
+                onClick={() => setInteractionMode("navigate")}
+                title="Modo Navegar: mover e girar câmera sem arrastar objetos"
+              >
+                <Compass size={16} weight="bold" aria-hidden="true" />
+                <span>Navegar</span>
+              </button>
+              <button
+                type="button"
+                className={interactionMode === "edit" ? "selected" : ""}
+                onClick={() => setInteractionMode("edit")}
+                title="Modo Editar: selecionar, posicionar e arrastar objetos"
+              >
+                <HandPointing size={16} weight="bold" aria-hidden="true" />
+                <span>Editar</span>
+              </button>
+            </div>
 
-              {tool === "belt" && <section className="queue-control-panel">
-                <div className="queue-panel-heading"><span>02</span><h2>Fitas</h2></div>
-                <p>Selecione dois postes distintos. A fita é uma barreira, não um percurso.</p>
-                <div className="queue-coordinate-form">
-                  <label>Primeiro poste<select value={fromPost} onChange={(event) => setFromPost(event.target.value)}><option value="">Escolher</option>{scene.posts.map((post) => <option key={post.id} value={post.id}>Poste {formatMeters(post.position.x)}, {formatMeters(post.position.z)} m</option>)}</select></label>
-                  <label>Segundo poste<select value={toPost} onChange={(event) => setToPost(event.target.value)}><option value="">Escolher</option>{scene.posts.filter((post) => post.id !== fromPost).map((post) => <option key={post.id} value={post.id}>Poste {formatMeters(post.position.x)}, {formatMeters(post.position.z)} m</option>)}</select></label>
-                </div>
-                <button className="button-secondary" type="button" onClick={addBelt} disabled={scene.posts.length < 2}>Conectar com fita</button>
-                <ul className="queue-entity-list">{scene.belts.map((belt) => <li key={belt.id}>
-                  <button type="button" className={selection?.kind === "belt" && selection.id === belt.id ? "queue-entity selected" : "queue-entity"} onClick={() => setSelection({ kind: "belt", id: belt.id })}>
-                    <span>{postLabel(scene.posts, belt.fromPostId)} ↔ {postLabel(scene.posts, belt.toPostId)}</span><small>Fita {formatMeters(belt.heightMeters)} m</small>
-                  </button>
-                </li>)}</ul>
-                <button className="queue-danger-button" type="button" onClick={removeSelected} disabled={selection?.kind !== "belt"}>Remover fita selecionada</button>
-              </section>}
+            <div className="grid-selector">
+              <label htmlFor="grid-step-select" className="sr-only">Grade</label>
+              <select
+                id="grid-step-select"
+                value={gridStep === null ? "off" : String(gridStep)}
+                onChange={(e) => setGridStep(e.target.value === "off" ? null : (Number(e.target.value) as GridStepMeters))}
+                title="Passo da grade métrica"
+              >
+                <option value="0.1">Grade 0,10 m</option>
+                <option value="0.25">Grade 0,25 m</option>
+                <option value="0.5">Grade 0,50 m</option>
+                <option value="1">Grade 1,00 m</option>
+                <option value="off">Sem grade</option>
+              </select>
+            </div>
 
-              {tool === "people" && <section className="queue-control-panel">
-                <div className="queue-panel-heading"><span>03</span><h2>Percurso e pessoas</h2></div>
-                <p>Desenhe pontos no piso ou informe as posições. Confirme para criar o percurso.</p>
-                <form className="queue-coordinate-form" onSubmit={addRoutePointByCoordinates}>
-                  <label>Posição X (m)<input value={routeX} onChange={(event) => setRouteX(event.target.value)} inputMode="decimal" /></label>
-                  <label>Posição Z (m)<input value={routeZ} onChange={(event) => setRouteZ(event.target.value)} inputMode="decimal" /></label>
-                  <button className="button-secondary" type="submit">Incluir ponto</button>
-                </form>
-                {routeDraft.length > 0 && <div className="queue-draft-summary">{routeDraft.length} pontos no percurso ainda não confirmado.
-                  <button className="queue-danger-button" type="button" onClick={() => setRouteDraft([])}>Limpar rascunho</button></div>}
-                <button className="button-secondary" type="button" onClick={confirmRoute} disabled={routeDraft.length < 2}>Confirmar percurso</button>
-                {queueRoute && <div className="people-actions">
-                  <p>Percurso ativo: {queueRoute.points.length} pontos · {formatMeters(stats.routeLengthMeters)} m</p>
-                  <div className="queue-inline-actions">
-                    <button className="button-secondary" type="button" onClick={() => run({ type: "people:add", routeId: queueRoute.id, id: newId("person") }, "Uma pessoa adicionada.")}>Adicionar 1 pessoa</button>
-                    <button className="button-secondary" type="button" onClick={() => run({ type: "people:add", routeId: queueRoute.id, id: newId("person") }, "Mais uma pessoa adicionada.")}>Adicionar mais 1</button>
-                    <button className="button-secondary" type="button" onClick={() => run({ type: "people:fill", routeId: queueRoute.id, idPrefix: newId("person") }, "O percurso foi preenchido até sua capacidade válida.")}>Preencher percurso</button>
-                  </div>
-                  <p>{peopleOnRoute.length} pessoa(s) posicionada(s) · capacidade para {stats.capacity}.</p>
-                </div>}
-                <ul className="queue-entity-list">{scene.routes.map((route) => <li key={route.id}>
-                  <button type="button" className={selection?.kind === "route" && selection.id === route.id ? "queue-entity selected" : "queue-entity"} onClick={() => setSelection({ kind: "route", id: route.id })}>
-                    <span>Percurso</span><small>{route.points.length} pontos</small>
-                  </button>
-                </li>)}{scene.people.map((person, index) => <li key={person.id}>
-                  <button type="button" className={selection?.kind === "person" && selection.id === person.id ? "queue-entity selected" : "queue-entity"} onClick={() => setSelection({ kind: "person", id: person.id })}>
-                    <span>Pessoa {index + 1}</span><small>{formatMeters(person.distanceAlongRouteMeters)} m do início</small>
-                  </button>
-                </li>)}</ul>
-                <button className="queue-danger-button" type="button" onClick={removeSelected} disabled={selection?.kind !== "person" && selection?.kind !== "route"}>Remover pessoa ou percurso selecionado</button>
-              </section>}
-            </aside>
+            {/* Indicador textual discreto — sem botão, borda ou fundo clicável */}
+            <span
+              className={validation.valid ? "status-indicator-valid" : "status-indicator-invalid"}
+              role="status"
+            >
+              {validation.valid ? "• Pronta para salvar" : "• Revise a planta"}
+            </span>
           </div>
 
-          <div className="queue-validation-row">
-            <span className={validation.valid ? "queue-valid" : "queue-invalid"}>{validation.valid ? "Fila válida" : "Revise a fila"}</span>
-            {!validation.valid && <ul>{queueErrorsForUser(validation.errors, "Confira os itens da fila antes de continuar.").map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}</ul>}
-            {error && <p className="queue-error" role="alert">{error}</p>}
-            {message && <p className="queue-message" role="status">{message}</p>}
+          <div className="camera-quick-tools" role="toolbar" aria-label="Controles da câmera">
+            <span>Câmera</span>
+            {([
+              ["rotate-left", "↶", "Girar à esquerda"],
+              ["rotate-right", "↷", "Girar à direita"],
+              ["tilt-up", "↑", "Inclinar para cima"],
+              ["tilt-down", "↓", "Inclinar para baixo"],
+              ["zoom-in", "+", "Aproximar"],
+              ["zoom-out", "−", "Afastar"],
+              ["pan-left", "←", "Mover à esquerda"],
+              ["pan-right", "→", "Mover à direita"],
+              ["center-bounds", "⌖", "Recentrar planta"],
+              ["center-selection", "◎", "Focar seleção"],
+              ["reset", "↺", "Repor vista"],
+            ] as const).map(([action, icon, label]) => (
+              <button
+                key={action}
+                type="button"
+                title={label}
+                aria-label={label}
+                onClick={() => sendCameraAction(action)}
+              >
+                <span aria-hidden="true">{icon}</span>
+                <small>{label.split(" ")[0]}</small>
+              </button>
+            ))}
           </div>
 
-          <div className="stage-footer queue-footer">
-            <div>{onBack && <button className="button-quiet" type="button" onClick={onBack}>Voltar à revisão</button>}
-              <button className="button-quiet" type="button" onClick={() => setStage("areas")}>Áreas restritas</button></div>
-            <button className="button-primary" type="button" onClick={() => void saveOrContinue()} disabled={saving || !validation.valid || environmentChanged}>
-              {saving ? "Salvando…" : mode === "edit" ? "Salvar alterações" : "Continuar para nomear"}
+          {sceneElement}
+
+          <div className="queue-canvas-foot">
+            <span>{formatMeters(stats.peopleCount)} pessoas</span>
+            {scene.routes.length > 0 && <span>{formatMeters(stats.routeLengthMeters)} m em percursos</span>}
+            <span>{scene.restrictedAreas.length} áreas</span>
+            {gridStep && <span>Grade {gridStep} m</span>}
+          </div>
+        </div>
+
+        <aside
+          className={showInspector ? "queue-bottom-tray inspector-open" : "queue-bottom-tray inspector-collapsed"}
+          aria-label="Ferramentas e inspetor da fila"
+        >
+          <div className="mobile-tray-heading">
+            <strong>
+              {selection ? `Item: ${selection.kind}` : tool === "area" ? "Área restrita" : tool === "belt" ? "Fita" : tool === "person" ? "Pessoas (Cadeia)" : "Poste"}
+            </strong>
+            <button
+              type="button"
+              className="button-quiet inspector-toggle"
+              onClick={() => setInspectorOpen((open) => !open)}
+              aria-expanded={showInspector}
+            >
+              {showInspector ? "Recolher" : "Ações"}
             </button>
           </div>
-        </>
-      )}
+
+          <div className="tool-palette" role="toolbar" aria-label="Adicionar itens">
+            <button
+              type="button"
+              className={tool === "post" ? "palette-item active" : "palette-item"}
+              onClick={() => { setTool("post"); setInteractionMode("edit"); }}
+              onPointerDown={(event) => onPalettePointerDown(event, "post")}
+              onPointerMove={onPalettePointerMove}
+              onPointerUp={onPalettePointerUp}
+              onPointerCancel={cancelPalettePointer}
+              onLostPointerCapture={cancelPalettePointer}
+              aria-label="Selecionar ou arrastar poste para a planta"
+            >
+              <ItemThumbnail kind="post" />
+              <span>Poste</span>
+            </button>
+
+            <button
+              type="button"
+              className={tool === "belt" ? "palette-item active" : "palette-item"}
+              onClick={() => { setTool("belt"); setInteractionMode("edit"); }}
+              aria-label="Conectar postes com fita"
+            >
+              <ItemThumbnail kind="belt" />
+              <span>Fita</span>
+            </button>
+
+            <button
+              type="button"
+              className={tool === "person" ? "palette-item active" : "palette-item"}
+              onClick={() => { setTool("person"); setInteractionMode("edit"); }}
+              onPointerDown={(event) => onPalettePointerDown(event, "person")}
+              onPointerMove={onPalettePointerMove}
+              onPointerUp={onPalettePointerUp}
+              onPointerCancel={cancelPalettePointer}
+              onLostPointerCapture={cancelPalettePointer}
+              aria-label={scene.people.length === 0 ? "Posicionar início da fila" : "Adicionar pessoa ao fim da fila"}
+            >
+              <ItemThumbnail kind="person" />
+              <span>{scene.people.length === 0 ? "Início Fila" : "+1 Fila"}</span>
+            </button>
+          </div>
+
+          <button
+            type="button"
+            className={tool === "area" ? "tool-link selected area-quick-action" : "tool-link area-quick-action"}
+            onClick={() => { setTool("area"); setAreaDraft(null); setInspectorOpen(true); setInteractionMode("edit"); }}
+          >
+            Área restrita
+          </button>
+
+          <p className="tool-hint" aria-live="polite">
+            {tool === "post"
+              ? "Arraste um poste ou toque no piso para adicionar."
+              : tool === "person"
+              ? (scene.people.length === 0 ? "Toque no piso para definir o início da fila." : "Toque no piso para continuar a fila ou selecione uma pessoa para +1.")
+              : tool === "belt"
+              ? "Toque no primeiro poste e depois no segundo para ligar."
+              : tool === "area"
+              ? "Arraste no piso para desenhar o retângulo da área."
+              : tool === "perimeter"
+              ? "Arraste um canto para ajustar a planta."
+              : "Toque em qualquer objeto para ver ações e medidas."}
+          </p>
+
+          {areaDraft && (
+            <div className="pending-area-actions" role="group" aria-label="Confirmar área desenhada">
+              <span>Prévia da área</span>
+              <label>
+                Nome
+                <input value={areaName} maxLength={80} onChange={(event) => setAreaName(event.target.value)} />
+              </label>
+              <button className="button-primary" type="button" onClick={confirmArea}>
+                <Check size={16} weight="bold" aria-hidden="true" />
+                <span>Usar área</span>
+              </button>
+              <button className="button-secondary" type="button" onClick={() => { setAreaDraft(null); setTool("area"); }}>
+                Desenhar outra
+              </button>
+              <button className="button-quiet" type="button" onClick={() => { setAreaDraft(null); setTool("select"); }}>
+                Cancelar
+              </button>
+            </div>
+          )}
+
+          {tool === "belt" && (
+            <div className="pending-belt" aria-live="polite">
+              <ItemThumbnail kind="belt" />
+              <span>
+                {!pendingBelt
+                  ? "Toque no primeiro poste."
+                  : !pendingBelt.toPostId
+                  ? "Agora toque no segundo poste."
+                  : "Conectar estes dois postes?"}
+              </span>
+              {pendingBelt?.toPostId && (
+                <button className="button-primary" type="button" onClick={connectBelt}>
+                  Conectar
+                </button>
+              )}
+              {pendingBelt && (
+                <button className="button-quiet" type="button" onClick={() => { setPendingBelt(null); setMessage(""); }}>
+                  Cancelar
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* INSPECTOR: PESSOA */}
+          {selectedPerson && (
+            <section className="selected-item-panel" aria-label="Pessoa selecionada na cadeia">
+              <div className="selected-item-title">
+                <ItemThumbnail kind="person" />
+                <div>
+                  <h3>Pessoa na fila</h3>
+                  <p>Ângulo: {((selectedPerson.yawRadians * 180) / Math.PI).toFixed(0)}° {selectedPerson.routeId !== null && "· Percurso legado"}</p>
+                </div>
+                <button
+                  type="button"
+                  className="button-quiet close-inspector-btn"
+                  onClick={() => setSelection(null)}
+                  aria-label="Desmarcar seleção"
+                  title="Fechar"
+                >
+                  <X size={16} weight="bold" aria-hidden="true" />
+                </button>
+              </div>
+
+              <div className="selected-item-actions">
+                <button
+                  className="button-secondary"
+                  type="button"
+                  onClick={() => setMoveSelectedMode((current) => !current)}
+                >
+                  <ArrowsOutCardinal size={16} weight="bold" aria-hidden="true" />
+                  <span>{moveSelectedMode ? "Toque no piso para mover" : "Mover"}</span>
+                </button>
+
+                <button
+                  className="button-secondary"
+                  type="button"
+                  onClick={() => run({ type: "person:rotate", id: selectedPerson.id, yawRadians: selectedPerson.yawRadians - Math.PI / 12 }, "Pessoa girada −15°.")}
+                >
+                  <ArrowsClockwise size={16} weight="bold" aria-hidden="true" />
+                  <span>Girar −15°</span>
+                </button>
+
+                <button
+                  className="button-secondary"
+                  type="button"
+                  onClick={() => run({ type: "person:rotate", id: selectedPerson.id, yawRadians: selectedPerson.yawRadians + Math.PI / 12 }, "Pessoa girada +15°.")}
+                >
+                  <ArrowsClockwise size={16} weight="bold" aria-hidden="true" />
+                  <span>Girar +15°</span>
+                </button>
+
+                {/* Botão touch DOM de 48px para +1 atrás repetível */}
+                <button
+                  className="button-primary add-person-chain-btn"
+                  type="button"
+                  onClick={() => appendPerson(selectedPerson)}
+                  aria-label="Acrescentar mais uma pessoa conectada atrás"
+                >
+                  <Plus size={18} weight="bold" aria-hidden="true" />
+                  <span>+1 atrás</span>
+                </button>
+
+                {confirmDelete ? (
+                  <div className="destructive-confirm-group">
+                    <span>Remover da fila?</span>
+                    <button className="queue-danger-button confirm-del-btn" type="button" onClick={removeSelection}>
+                      Confirmar
+                    </button>
+                    <button className="button-quiet" type="button" onClick={() => setConfirmDelete(false)}>
+                      Cancelar
+                    </button>
+                  </div>
+                ) : (
+                  <button className="queue-danger-button" type="button" onClick={() => setConfirmDelete(true)}>
+                    <Trash size={16} weight="bold" aria-hidden="true" />
+                    <span>Apagar</span>
+                  </button>
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* INSPECTOR: POSTE */}
+          {selectedPost && (
+            <section className="selected-item-panel" aria-label="Poste selecionado">
+              <div className="selected-item-title">
+                <ItemThumbnail kind="post" />
+                <div>
+                  <h3>Poste</h3>
+                  <p>Aceita múltiplas conexões de fita</p>
+                </div>
+                <button
+                  type="button"
+                  className="button-quiet close-inspector-btn"
+                  onClick={() => setSelection(null)}
+                  aria-label="Desmarcar seleção"
+                  title="Fechar"
+                >
+                  <X size={16} weight="bold" aria-hidden="true" />
+                </button>
+              </div>
+
+              <div className="selected-item-actions">
+                <button
+                  className="button-secondary"
+                  type="button"
+                  onClick={() => setMoveSelectedMode((current) => !current)}
+                >
+                  <ArrowsOutCardinal size={16} weight="bold" aria-hidden="true" />
+                  <span>{moveSelectedMode ? "Toque no piso para mover" : "Mover"}</span>
+                </button>
+
+                <button
+                  className="button-secondary"
+                  type="button"
+                  onClick={() => {
+                    setTool("belt");
+                    setPendingBelt({ fromPostId: selectedPost.id });
+                    setMessage("Primeiro poste selecionado. Toque no segundo poste para ligar fita.");
+                  }}
+                >
+                  <Plus size={16} weight="bold" aria-hidden="true" />
+                  <span>Ligar fita</span>
+                </button>
+
+                {confirmDelete ? (
+                  <div className="destructive-confirm-group">
+                    <span>Remover poste e fitas ligadas?</span>
+                    <button className="queue-danger-button confirm-del-btn" type="button" onClick={removeSelection}>
+                      Confirmar
+                    </button>
+                    <button className="button-quiet" type="button" onClick={() => setConfirmDelete(false)}>
+                      Cancelar
+                    </button>
+                  </div>
+                ) : (
+                  <button className="queue-danger-button" type="button" onClick={() => setConfirmDelete(true)}>
+                    <Trash size={16} weight="bold" aria-hidden="true" />
+                    <span>Apagar poste</span>
+                  </button>
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* INSPECTOR: FITA */}
+          {selectedBelt && (
+            <section className="selected-item-panel" aria-label="Fita selecionada">
+              <div className="selected-item-title">
+                <ItemThumbnail kind="belt" />
+                <div>
+                  <h3>Fita entre postes</h3>
+                  <p>Ligada atomicamente aos endpoints</p>
+                </div>
+                <button
+                  type="button"
+                  className="button-quiet close-inspector-btn"
+                  onClick={() => setSelection(null)}
+                  aria-label="Desmarcar seleção"
+                  title="Fechar"
+                >
+                  <X size={16} weight="bold" aria-hidden="true" />
+                </button>
+              </div>
+
+              <p className="belt-restriction-notice">
+                <Info size={16} weight="duotone" aria-hidden="true" />
+                <span>Uma fita deriva diretamente dos seus dois postes. Para alterar sua rota ou posição, mova os postes conectados.</span>
+              </p>
+
+              <div className="selected-item-actions">
+                {confirmDelete ? (
+                  <div className="destructive-confirm-group">
+                    <span>Remover esta fita?</span>
+                    <button className="queue-danger-button confirm-del-btn" type="button" onClick={removeSelection}>
+                      Confirmar
+                    </button>
+                    <button className="button-quiet" type="button" onClick={() => setConfirmDelete(false)}>
+                      Cancelar
+                    </button>
+                  </div>
+                ) : (
+                  <button className="queue-danger-button" type="button" onClick={() => setConfirmDelete(true)}>
+                    <Trash size={16} weight="bold" aria-hidden="true" />
+                    <span>Apagar fita</span>
+                  </button>
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* INSPECTOR: ÁREA */}
+          {selectedArea && (
+            <section className="selected-item-panel" aria-label="Área restrita selecionada">
+              <div className="selected-item-title">
+                <ItemThumbnail kind="area" />
+                <div>
+                  <h3>{selectedArea.name}</h3>
+                  <p>Obstáculo para fila e fitas</p>
+                </div>
+                <button
+                  type="button"
+                  className="button-quiet close-inspector-btn"
+                  onClick={() => setSelection(null)}
+                  aria-label="Desmarcar seleção"
+                  title="Fechar"
+                >
+                  <X size={16} weight="bold" aria-hidden="true" />
+                </button>
+              </div>
+
+              {/* Distâncias métricas externas até as paredes */}
+              {areaDistances && areaDistances.areaId === selectedArea.id && (
+                <div className="area-wall-metrics" aria-label="Distâncias até paredes externas">
+                  <h4>Distâncias até as paredes</h4>
+                  <div className="metrics-grid">
+                    <div><span>Norte (+Z)</span><strong>{formatMeters(areaDistances.north)} m</strong></div>
+                    <div><span>Sul (−Z)</span><strong>{formatMeters(areaDistances.south)} m</strong></div>
+                    <div><span>Leste (+X)</span><strong>{formatMeters(areaDistances.east)} m</strong></div>
+                    <div><span>Oeste (−X)</span><strong>{formatMeters(areaDistances.west)} m</strong></div>
+                  </div>
+                </div>
+              )}
+
+              <div className="selected-item-actions">
+                {confirmDelete ? (
+                  <div className="destructive-confirm-group">
+                    <span>Remover esta área?</span>
+                    <button className="queue-danger-button confirm-del-btn" type="button" onClick={removeSelection}>
+                      Confirmar
+                    </button>
+                    <button className="button-quiet" type="button" onClick={() => setConfirmDelete(false)}>
+                      Cancelar
+                    </button>
+                  </div>
+                ) : (
+                  <button className="queue-danger-button" type="button" onClick={() => setConfirmDelete(true)}>
+                    <Trash size={16} weight="bold" aria-hidden="true" />
+                    <span>Apagar área</span>
+                  </button>
+                )}
+              </div>
+            </section>
+          )}
+
+          <div className="editor-utility-row">
+            <label>
+              Espaçamento na cadeia
+              <select value={scene.simulation.spacingMeters} onChange={(event) => updateSpacing(event.target.value)}>
+                <option value="0.5">0,5 m (compacto)</option>
+                <option value="0.8">0,8 m (padrão)</option>
+                <option value="1">1,0 m (confortável)</option>
+              </select>
+            </label>
+            <span>{scene.people.length} pessoas na planta</span>
+          </div>
+
+          <details className="editor-more-tools">
+            <summary>Ajustes de Ambiente e Planta</summary>
+            <div className="secondary-tools">
+              <button
+                type="button"
+                className={tool === "area" ? "tool-link selected" : "tool-link"}
+                onClick={() => { setTool("area"); setAreaDraft(null); setInteractionMode("edit"); }}
+              >
+                Desenhar área restrita
+              </button>
+              <button
+                type="button"
+                className={tool === "perimeter" ? "tool-link selected" : "tool-link"}
+                onClick={() => { setTool("perimeter"); setInteractionMode("edit"); }}
+              >
+                Ajustar cantos da planta
+              </button>
+            </div>
+            {!scene.environment.confirmedAt && (
+              <button className="button-primary" type="button" onClick={confirmEnvironment} style={{ marginTop: "8px" }}>
+                Confirmar planta
+              </button>
+            )}
+            {scene.routes.length > 0 && (
+              <div className="legacy-routes">
+                <p>Este projeto contém rotas legadas compatíveis. O espaçamento também se aplica a elas.</p>
+              </div>
+            )}
+          </details>
+
+          {!validation.valid && (
+            <ul className="queue-user-validation" role="status">
+              {queueErrorsForUser(validation.errors, "Revise a planta antes de salvar.").map((item, index) => (
+                <li key={`${index}-${item}`}>{item}</li>
+              ))}
+            </ul>
+          )}
+
+          {error && <p className="queue-error" role="alert">{error}</p>}
+          {message && <p className="queue-message" role="status">{message}</p>}
+
+          <div className="tray-actions">
+            {onBack && (
+              <button className="button-quiet" type="button" onClick={onBack}>
+                Voltar às medidas
+              </button>
+            )}
+            <button
+              className="button-primary"
+              type="button"
+              onClick={() => void continueOrSave()}
+              disabled={saving || !validation.valid}
+            >
+              {saving ? "Salvando…" : mode === "edit" ? "Salvar alterações" : "Nomear e salvar"}
+            </button>
+          </div>
+        </aside>
+      </div>
     </section>
   );
-}
-
-function postLabel(posts: Stanchion[], id: string): string {
-  const post = posts.find((item) => item.id === id);
-  return post ? `Poste ${formatMeters(post.position.x)}, ${formatMeters(post.position.z)} m` : "Poste indisponível";
 }

@@ -2,9 +2,21 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { apiFetch, readApiError } from "../lib/http";
 import type { ProjectSummary, ProjectsResponse, SessionResponse } from "../lib/contracts";
+import type { ProjectScene } from "../../../contracts/project.ts";
+import { BrandLogo } from "./brand-logo";
+import { AppNav } from "./app-nav";
+import { SettingsPanel, type GridStep, type NavigationMode } from "./settings-panel";
+import { generateSceneThumbnailSvg } from "../lib/scene-thumbnail";
+import {
+  Plus,
+  ArrowSquareOut,
+  SlidersHorizontal,
+  WarningCircle,
+  FolderOpen
+} from "@phosphor-icons/react/dist/ssr";
 
 function formatDate(value: string): string {
   const date = new Date(value);
@@ -16,13 +28,72 @@ function initials(name: string): string {
   return name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toLocaleUpperCase("pt-BR")).join("") || "?";
 }
 
+function ProjectThumbnail({ projectId }: { projectId: string }) {
+  const [svg, setSvg] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    async function fetchScene() {
+      try {
+        const res = await apiFetch(`/api/projects/${encodeURIComponent(projectId)}`);
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        if (active && data?.project?.scene) {
+          const generated = generateSceneThumbnailSvg(data.project.scene as ProjectScene, 300, 194);
+          setSvg(generated);
+        }
+      } catch {
+        // Fallback default
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    void fetchScene();
+    return () => { active = false; };
+  }, [projectId]);
+
+  if (loading) {
+    return <div className="skeleton-preview" aria-hidden="true" />;
+  }
+
+  if (svg) {
+    return (
+      <div
+        className="project-preview project-preview-svg"
+        dangerouslySetInnerHTML={{ __html: svg }}
+        aria-label="Miniatura métrica da cena"
+      />
+    );
+  }
+
+  return (
+    <div className="project-preview" aria-label="Prévia simplificada">
+      <span className="preview-label">PRÉVIA MÉTRICA</span>
+    </div>
+  );
+}
+
 export function Dashboard() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const showSettingsParam = searchParams.get("settings") === "1";
+
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [userName, setUserName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [signingOut, setSigningOut] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(showSettingsParam);
+
+  const [gridStep, setGridStep] = useState<GridStep>(0.25);
+  const [navigationMode, setNavigationMode] = useState<NavigationMode>("navigate");
+
+  useEffect(() => {
+    if (showSettingsParam) {
+      setSettingsOpen(true);
+    }
+  }, [showSettingsParam]);
 
   const loadProjects = useCallback(async () => {
     setLoading(true);
@@ -78,11 +149,19 @@ export function Dashboard() {
     <a className="skip-link" href="#main-content">Pular para o conteúdo</a>
     <main className="dashboard-page" id="main-content">
       <header className="dashboard-header">
-        <a className="wordmark dashboard-wordmark" href="/" aria-label="TestaFila, início">
-          <span>testa<span className="wordmark-light">fila</span></span>
-        </a>
-        <div className="header-context"><span className="context-line" /> MEUS PROJETOS</div>
+        <BrandLogo href="/" className="dashboard-wordmark" label="TestaFila, início" />
+        <AppNav />
         <div className="account-menu">
+          <button
+            type="button"
+            className="button-quiet header-settings-btn"
+            onClick={() => setSettingsOpen((prev) => !prev)}
+            aria-label="Abrir configurações de visualização"
+            title="Configurações"
+          >
+            <SlidersHorizontal size={18} weight="bold" aria-hidden="true" />
+            <span className="desktop-only-inline">Opções</span>
+          </button>
           <span className="account-avatar" aria-hidden="true">{initials(userName)}</span>
           <span className="account-name">{userName || "Conta"}</span>
           <button className="button-quiet" type="button" onClick={signOut} disabled={signingOut}>
@@ -91,45 +170,100 @@ export function Dashboard() {
         </div>
       </header>
 
+      {settingsOpen && (
+        <div className="dashboard-settings-overlay">
+          <SettingsPanel
+            gridStep={gridStep}
+            navigationMode={navigationMode}
+            onGridStepChange={setGridStep}
+            onNavigationModeChange={setNavigationMode}
+            onClose={() => setSettingsOpen(false)}
+          />
+        </div>
+      )}
+
       <section className="dashboard-main" aria-labelledby="dashboard-title">
         <div className="dashboard-heading">
           <div><p className="eyebrow">ESPAÇO DE TRABALHO</p>
             <h1 id="dashboard-title">Seus projetos<span className="heading-period">.</span></h1>
-            <p className="dashboard-subtitle">Projetos salvos nesta conta.</p>
+            <p className="dashboard-subtitle">Projetos salvos nesta conta com geometria métrica real.</p>
           </div>
           <div className="dashboard-actions">
             <span className="project-count">{loading ? "…" : String(projects.length).padStart(2, "0")} <span>PROJETOS</span></span>
-            <Link className="button-primary create-project" href="/projects/new">Criar nova fila</Link>
+            <Link className="button-primary create-project" href="/projects/new">
+              <Plus size={16} weight="bold" aria-hidden="true" />
+              <span>Criar nova fila</span>
+            </Link>
           </div>
         </div>
 
-        {error && <div className="notice-error" role="alert"><span>{error}</span>
-          <button className="button-quiet" type="button" onClick={() => void loadProjects()}>Tentar novamente</button>
-        </div>}
+        {error && (
+          <div className="notice-error" role="alert">
+            <WarningCircle size={20} weight="bold" aria-hidden="true" />
+            <span>{error}</span>
+            <button className="button-quiet" type="button" onClick={() => void loadProjects()}>Tentar novamente</button>
+          </div>
+        )}
 
         {loading ? (
           <div className="project-grid" aria-label="Carregando projetos" aria-busy="true">
-            {[0, 1, 2].map((item) => <div className="project-skeleton" key={item}><div className="skeleton-preview" /><div className="skeleton-line" /><div className="skeleton-line skeleton-short" /></div>)}
+            {[0, 1, 2].map((item) => (
+              <div className="project-skeleton" key={item}>
+                <div className="skeleton-preview" />
+                <div className="skeleton-line" />
+                <div className="skeleton-line skeleton-short" />
+              </div>
+            ))}
           </div>
         ) : !error && projects.length === 0 ? (
-          <div className="empty-state"><div className="empty-drawing" aria-hidden="true"><span /><span /><span /><span /></div>
-            <p className="eyebrow">AINDA SEM PROJETOS</p><h2>Seu espaço começa aqui.</h2>
-            <p>Quando um projeto for salvo, ele aparecerá nesta galeria.</p>
+          <div className="empty-state">
+            <div className="empty-drawing" aria-hidden="true"><span /><span /><span /><span /></div>
+            <p className="eyebrow">AINDA SEM PROJETOS</p>
+            <h2>Seu espaço começa aqui.</h2>
+            <p>Quando um projeto for salvo, ele aparecerá nesta galeria com prévia métrica gerada.</p>
+            <Link className="button-primary" href="/projects/new" style={{ marginTop: "16px" }}>
+              <Plus size={16} weight="bold" aria-hidden="true" />
+              <span>Criar primeira fila</span>
+            </Link>
           </div>
         ) : !error ? (
           <div className="project-grid" aria-label="Projetos salvos">
-            {projects.map((project, index) => <article className="project-card" key={project.id} style={{ "--item-delay": `${index * 55}ms` } as React.CSSProperties}>
-              <div className="project-preview" aria-label="Prévia indisponível">
-                <span className="preview-label">PRÉVIA INDISPONÍVEL</span>
-              </div>
-              <div className="project-card-info"><div><h2>{project.name}</h2><p>Atualizado em {formatDate(project.updatedAt)}</p></div>
-                <Link className="open-project" href={`/projects/${encodeURIComponent(project.id)}`} aria-label={`Abrir ${project.name}`}>↗</Link>
-              </div>
-              <p className="project-status"><span /> SALVO · REV. {project.revision}</p>
-            </article>)}
+            {projects.map((project, index) => (
+              <article className="project-card" key={project.id} style={{ "--item-delay": `${index * 55}ms` } as React.CSSProperties}>
+                <ProjectThumbnail projectId={project.id} />
+                <div className="project-card-info">
+                  <div>
+                    <h2>{project.name}</h2>
+                    <p>Atualizado em {formatDate(project.updatedAt)}</p>
+                  </div>
+                  <div className="project-card-ctas">
+                    <Link
+                      className="button-primary card-open-cta"
+                      href={`/projects/${encodeURIComponent(project.id)}`}
+                      aria-label={`Abrir e visualizar ${project.name}`}
+                    >
+                      <FolderOpen size={16} weight="bold" aria-hidden="true" />
+                      <span>Abrir</span>
+                    </Link>
+                    <Link
+                      className="button-secondary card-edit-cta"
+                      href={`/projects/${encodeURIComponent(project.id)}/edit`}
+                      aria-label={`Editar projeto ${project.name}`}
+                    >
+                      <ArrowSquareOut size={16} weight="bold" aria-hidden="true" />
+                      <span>Editar</span>
+                    </Link>
+                  </div>
+                </div>
+                <p className="project-status"><span /> SALVO · REV. {project.revision}</p>
+              </article>
+            ))}
           </div>
         ) : null}
-        <div className="dashboard-bottom"><span>TESTAFILA · PROJETOS DA CONTA</span><span>UMA UNIDADE ESPACIAL = 1 METRO</span></div>
+        <div className="dashboard-bottom">
+          <span>TESTAFILA · PROJETOS DA CONTA</span>
+          <span>UMA UNIDADE ESPACIAL = 1 METRO</span>
+        </div>
       </section>
     </main>
     </>

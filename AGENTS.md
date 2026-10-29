@@ -1,5 +1,18 @@
 # TestaFila
 
+Pedido mais recente 28/10: docs/SPRINT-05.md prevalece. Agys Flash High com
+--dangerously-skip-permissions. Sem ask back Maestri e sem gate de revisão do
+coordenador; usuário fará aceite. Escopos/markers no sprint: Cedro base/contratos
+e API, Prumo cena/contrato de cena, Trama UI e fechamento integrado. Não assumir
+que o modelo de pessoas livres do lote 4 continua sendo o comportamento desejado.
+
+Atualização 28/10/2026: escopos vigentes em docs/SPRINT-04.md. A revisão atual
+prioriza editor 3D e mobile antes da câmera. Cedro mantém domínio/testes de filas;
+Trama UI/CSS/lib (exceto xr-check); Prumo scene e docs/3D-INTERACOES.md.
+Coordenador integra API, contratos, manifests e QA Playwright. Skills solicitadas
+e personas instaladas estão em docs/SKILLS-LOTE04.md. Não declarar aceite em
+aparelho físico a partir de viewport headless; XR continua experimental.
+
 O usuário pediu coordenação com fases e agentes especializados. Antes de alterar código,
 leia docs/ARCHITECTURE.md, docs/DELIVERY.md e docs/referencias/DESIGN-SLIDE-CINTIA.md.
 A especificação de MVP do usuário de 22/10/2026 prevalece sobre o protótipo e os PDFs.

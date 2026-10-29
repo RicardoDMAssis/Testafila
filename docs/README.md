@@ -1,5 +1,13 @@
 # Documentação TestaFila
 
+Próxima revisão solicitada: [ondas 5 — fila conectada e app touch](SPRINT-05.md).
+Plano delegado; não representa implementação já concluída. O usuário fará aceite.
+
+Revisão do editor em 28/10: [SPRINT-04.md](SPRINT-04.md),
+[3D-INTERACOES.md](3D-INTERACOES.md) e [SKILLS-LOTE04.md](SKILLS-LOTE04.md).
+O relatório de 27/10 abaixo descreve a entrega anterior; a interface atual usa
+retângulo, ajuste de cantos no canvas e pessoas independentes de percursos.
+
 Atualizada em 27/10/2026. **Comece pelo [relatório de passagem](PASSAGEM-COLEGA.md).**
 Estado do produto: editor manual/3D funcional; MVP WebAR ainda incompleto.
 
@@ -19,6 +27,8 @@ Estado do produto: editor manual/3D funcional; MVP WebAR ainda incompleto.
 | [DELIVERY.md](DELIVERY.md) | Síntese do estado de entrega. |
 
 ## Evidências datadas
+
+- [QA-LOTE-04.md](QA-LOTE-04.md): build final, três viewports, fluxo visual completo e capturas de 28/10.
 
 - [QA-LOTE-03.md](QA-LOTE-03.md): primeira rodada integrada de 22/10.
 - [QA-FECHAMENTO-LOTE-03.md](QA-FECHAMENTO-LOTE-03.md): correções e retestes posteriores.

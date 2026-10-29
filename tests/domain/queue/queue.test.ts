@@ -128,6 +128,182 @@ describe('queue domain', () => {
     assert.equal(getQueueStats(result.scene).peopleCount, result.scene.people.length);
   });
 
+  it('accepts free people with null route and distance and rejects mismatched null pairs', () => {
+    const freePerson = {
+      id: 'free-person', routeId: null, distanceAlongRouteMeters: null,
+      position: { x: 1, z: 1 }, yawRadians: 0,
+    };
+    const validScene = { ...createScene(), people: [freePerson] };
+    const invalidScene = {
+      ...validScene,
+      people: [{ ...freePerson, distanceAlongRouteMeters: 1 }],
+    };
+
+    assert.equal(validateQueueScene(validScene).valid, true);
+    assert.equal(validateQueueScene(invalidScene).valid, false);
+  });
+
+  it('adds a free person facing +Z at the requested position', () => {
+    const scene = createScene();
+    const person = {
+      id: 'new-free', routeId: null, distanceAlongRouteMeters: null,
+      position: { x: 2, z: 2 }, yawRadians: Math.PI / 2,
+    };
+
+    const result = applyQueueCommand(scene, { type: 'person:add', person });
+
+    assert.equal(result.valid, true);
+    assert.deepEqual(result.scene.people, [{ ...person, yawRadians: 0 }]);
+    assert.deepEqual(scene.people, []);
+    const routePerson = { ...person, routeId: bentRoute.id, distanceAlongRouteMeters: 0 };
+    assert.equal(applyQueueCommand(scene, { type: 'person:add', person: routePerson }).valid, false);
+  });
+
+  it('moves or rotates only the selected route person and converts it to free placement', () => {
+    const routeScene = applyQueueCommand(createScene(), { type: 'route:set', route: bentRoute }).scene;
+    const filled = applyQueueCommand(routeScene, {
+      type: 'people:fill', routeId: bentRoute.id, idPrefix: 'move-',
+    }).scene;
+    const targetId = filled.people[0]!.id;
+    const untouched = filled.people[1]!;
+    const moved = applyQueueCommand(filled, {
+      type: 'person:move', id: targetId, position: { x: 2, z: 5 },
+    });
+
+    assert.equal(moved.valid, true);
+    assert.equal(moved.scene.people.find((person) => person.id === targetId)?.routeId, null);
+    assert.equal(moved.scene.people.find((person) => person.id === targetId)?.distanceAlongRouteMeters, null);
+    assert.equal(moved.scene.people.find((person) => person.id === untouched.id), untouched);
+    const rotated = applyQueueCommand(moved.scene, { type: 'person:rotate', id: targetId, yawRadians: Math.PI / 2 });
+    assert.equal(rotated.valid, true);
+    assert.equal(rotated.scene.people.find((person) => person.id === targetId)?.yawRadians, Math.PI / 2);
+    assert.equal(rotated.scene.people.find((person) => person.id === untouched.id), untouched);
+  });
+
+  it('appends a free person behind source position using source yaw and configured spacing', () => {
+    const scene = createScene();
+    scene.people = [{
+      id: 'source', routeId: null, distanceAlongRouteMeters: null,
+      position: { x: 4, z: 4 }, yawRadians: 0,
+    }];
+    const history = createQueueHistory(scene);
+    const result = executeQueueCommand(history, { type: 'person:append', sourceId: 'source', id: 'appended' });
+    const appended = result.history.present.people.find((person) => person.id === 'appended');
+
+    assert.equal(result.valid, true);
+    assert.deepEqual(appended?.position, { x: 4, z: 3.2 });
+    assert.equal(appended?.routeId, null);
+    assert.equal(appended?.distanceAlongRouteMeters, null);
+    assert.equal(appended?.yawRadians, 0);
+    assert.equal(scene.people.length, 1);
+    assert.equal(undoQueue(result.history).present, scene);
+    assert.equal(redoQueue(undoQueue(result.history)).present, result.history.present);
+  });
+
+  it('rejects an append that collides without changing the input reference', () => {
+    const scene = createScene();
+    scene.restrictedAreas = [{
+      id: 'append-zone',
+      name: 'Zona de bloqueio',
+      vertices: [
+        { id: 'append-zone-a', x: 3.8, z: 3 }, { id: 'append-zone-b', x: 4.2, z: 3 },
+        { id: 'append-zone-c', x: 4.2, z: 3.4 }, { id: 'append-zone-d', x: 3.8, z: 3.4 },
+      ],
+    }];
+    scene.people = [{
+      id: 'source', routeId: null, distanceAlongRouteMeters: null,
+      position: { x: 4, z: 4 }, yawRadians: 0,
+    }];
+    const result = applyQueueCommand(scene, { type: 'person:append', sourceId: 'source', id: 'colliding' });
+
+    assert.equal(result.valid, false);
+    assert.equal(result.scene, scene);
+    assert.equal(scene.people.length, 1);
+  });
+
+  it('keeps free people and their placement unchanged when spacing redistributes routes', () => {
+    const routeScene = applyQueueCommand(createScene(), { type: 'route:set', route: bentRoute }).scene;
+    const withRoutePeople = applyQueueCommand(routeScene, {
+      type: 'people:fill', routeId: bentRoute.id, idPrefix: 'route-',
+    }).scene;
+    const freePerson = {
+      id: 'free-person', routeId: null, distanceAlongRouteMeters: null,
+      position: { x: 8, z: 6 }, yawRadians: 0.3,
+    };
+    const mixedScene = { ...withRoutePeople, people: [...withRoutePeople.people, freePerson] };
+    assert.equal(validateQueueScene(mixedScene).valid, true);
+
+    const result = applyQueueCommand(mixedScene, { type: 'simulation:spacing', spacingMeters: 0.5 });
+
+    assert.equal(result.valid, true);
+    assert.equal(result.scene.people.find((person) => person.id === freePerson.id), freePerson);
+    assert.deepEqual(freePerson.position, { x: 8, z: 6 });
+    assert.equal(freePerson.yawRadians, 0.3);
+  });
+
+  it('reduces route occupancy around a free person without rejecting the spacing edit', () => {
+    const route: QueueRoute = {
+      id: 'shared-space',
+      points: [{ id: 'shared-a', x: 1, z: 2 }, { id: 'shared-b', x: 5, z: 2 }],
+    };
+    const routeScene = applyQueueCommand(createScene(), { type: 'route:set', route }).scene;
+    const filledScene = applyQueueCommand(routeScene, {
+      type: 'people:fill', routeId: route.id, idPrefix: 'queued-',
+    }).scene;
+    const freePerson = {
+      id: 'free-near-route', routeId: null, distanceAlongRouteMeters: null,
+      position: { x: 1.4, z: 2.4 }, yawRadians: 0,
+    };
+    const mixedScene = { ...filledScene, people: [...filledScene.people, freePerson] };
+    assert.equal(validateQueueScene(mixedScene).valid, true);
+
+    const result = applyQueueCommand(mixedScene, { type: 'simulation:spacing', spacingMeters: 0.5 });
+
+    assert.equal(result.valid, true);
+    assert.equal(result.scene.people.filter((person) => person.routeId === route.id).length, 1);
+    assert.equal(result.scene.people.find((person) => person.id === freePerson.id), freePerson);
+    assert.equal(validateQueueScene(result.scene).valid, true);
+  });
+
+  it('moves a perimeter vertex, clears confirmation and rejects invalidating existing geometry atomically', () => {
+    const scene = createScene();
+    scene.environment = { ...scene.environment, confirmedAt: '2026-10-28T12:00:00.000Z' };
+    const moved = applyQueueCommand(scene, {
+      type: 'environment:vertex-move', id: 'corner-2', position: { x: 9, z: 0 },
+    });
+
+    assert.equal(moved.valid, true);
+    assert.equal(moved.scene.environment.confirmedAt, null);
+    assert.equal(moved.scene.environment.perimeter.find((vertex) => vertex.id === 'corner-2')?.x, 9);
+
+    const guardedScene = createScene();
+    guardedScene.posts = [{
+      id: 'edge-post', position: { x: 9.5, z: 4 }, heightMeters: 0.95, baseRadiusMeters: 0.16,
+    }];
+    assert.equal(validateQueueScene(guardedScene).valid, true);
+    const invalidatingMove = applyQueueCommand(guardedScene, {
+      type: 'environment:vertex-move', id: 'corner-2', position: { x: 8.8, z: 0 },
+    });
+
+    assert.equal(invalidatingMove.valid, false);
+    assert.equal(invalidatingMove.scene, guardedScene);
+  });
+
+  it('confirms environment only with valid ISO timestamps and history can undo confirmation', () => {
+    const scene = createScene();
+    const invalid = applyQueueCommand(scene, { type: 'environment:confirm', confirmedAt: 'not-a-date' });
+    assert.equal(invalid.valid, false);
+    assert.equal(invalid.scene, scene);
+    const history = createQueueHistory(scene);
+    const confirmed = executeQueueCommand(history, {
+      type: 'environment:confirm', confirmedAt: '2026-10-28T12:30:00.000Z',
+    });
+
+    assert.equal(confirmed.valid, true);
+    assert.equal(confirmed.history.present.environment.confirmedAt, '2026-10-28T12:30:00.000Z');
+    assert.equal(undoQueue(confirmed.history).present, scene);
+  });
+
   it('does not shorten configured spacing to occupy a closer route endpoint', () => {
     const route: QueueRoute = {
       id: 'seven-meters',
@@ -141,7 +317,10 @@ describe('queue domain', () => {
     assert.equal(result.valid, true);
     assert.equal(result.scene.people.length, 9);
     assert.equal(result.scene.people[0]?.distanceAlongRouteMeters, 0);
-    assert.ok(Math.abs(result.scene.people.at(-1)!.distanceAlongRouteMeters - 6.4) < 1e-9);
+    const lastPerson = result.scene.people.at(-1);
+    assert.ok(lastPerson);
+    assert.ok(typeof lastPerson.distanceAlongRouteMeters === 'number');
+    assert.ok(Math.abs(lastPerson.distanceAlongRouteMeters - 6.4) < 1e-9);
   });
 
   it('includes the endpoint when route length is an exact spacing multiple', () => {
@@ -155,7 +334,10 @@ describe('queue domain', () => {
     });
 
     assert.equal(result.valid, true);
-    assert.ok(Math.abs(result.scene.people.at(-1)!.distanceAlongRouteMeters - 5.6) < 1e-9);
+    const lastPerson = result.scene.people.at(-1);
+    assert.ok(lastPerson);
+    assert.ok(typeof lastPerson.distanceAlongRouteMeters === 'number');
+    assert.ok(Math.abs(lastPerson.distanceAlongRouteMeters - 5.6) < 1e-9);
   });
 
   it('removes dependent belts atomically and undo/redo restores the full scene', () => {

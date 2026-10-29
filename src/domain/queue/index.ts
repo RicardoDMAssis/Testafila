@@ -14,15 +14,25 @@ import type {
   QueueStats,
   QueueValidation,
 } from '../../../contracts/queue-editor.ts';
-import { validateEnvironment } from '../environment.ts';
+import { movePerimeterVertex, validateEnvironment } from '../environment.ts';
 import { distancePointToSegment, classifySegmentIntersection } from '../intersection.ts';
 import { EPSILON, distance } from '../math2d.ts';
+import { isValidIsoDateString } from '../measurement.ts';
 import { isPointInPolygon, validateSimplePolygon } from '../polygon.ts';
 
 const MAX_PEOPLE = 10_000;
 const validResult = (): QueueValidation => ({ valid: true, errors: [] });
 const invalidResult = (...errors: string[]): QueueValidation => ({ valid: false, errors });
 const isFinitePoint = (point: PointXZ): boolean => Number.isFinite(point?.x) && Number.isFinite(point?.z);
+type RoutePersonPlacement = PersonPlacement & { routeId: string; distanceAlongRouteMeters: number };
+function isRoutePersonPlacement(person: PersonPlacement, routeId?: string): person is RoutePersonPlacement {
+  return typeof person.routeId === 'string'
+    && (routeId === undefined || person.routeId === routeId)
+    && typeof person.distanceAlongRouteMeters === 'number'
+    && Number.isFinite(person.distanceAlongRouteMeters)
+    && person.distanceAlongRouteMeters >= 0;
+}
+
 const vector = (from: PointXZ, to: PointXZ): PointXZ => ({ x: to.x - from.x, z: to.z - from.z });
 const dot = (a: PointXZ, b: PointXZ): number => a.x * b.x + a.z * b.z;
 const cross = (a: PointXZ, b: PointXZ): number => a.x * b.z - a.z * b.x;
@@ -315,15 +325,35 @@ function validate(scene: ProjectScene): QueueValidation {
   const peopleCollisionIndex = createCollisionIndex(2 * simulation.personRadiusMeters + simulation.clearanceMeters);
   for (const person of scene.people) {
     addUniqueId(ids, person.id, errors);
-    const route = scene.routes.find((candidate) => candidate.id === person.routeId);
-    const expected = route && routePointAt(route, person.distanceAlongRouteMeters);
-    if (!Number.isFinite(person.distanceAlongRouteMeters) || person.distanceAlongRouteMeters < 0) errors.push(`Pessoa ${person.id} possui distância inválida`);
-    if (!expected || !isFinitePoint(person.position) || !Number.isFinite(person.yawRadians)
+    const isFreePlacement = person.routeId === null && person.distanceAlongRouteMeters === null;
+    const isRoutePlacement = isRoutePersonPlacement(person);
+    const route = isRoutePlacement
+      ? scene.routes.find((candidate) => candidate.id === person.routeId)
+      : undefined;
+    const expected = route && isRoutePlacement
+      ? routePointAt(route, person.distanceAlongRouteMeters)
+      : undefined;
+
+    if (!isFreePlacement && !isRoutePlacement) {
+      errors.push(`Pessoa ${person.id} precisa ter rota e distância juntas, ou ambas nulas`);
+    }
+    if (typeof person.distanceAlongRouteMeters === 'number'
+      && (!Number.isFinite(person.distanceAlongRouteMeters) || person.distanceAlongRouteMeters < 0)) {
+      errors.push(`Pessoa ${person.id} possui distância inválida`);
+    }
+    if (!isFinitePoint(person.position) || !Number.isFinite(person.yawRadians)) {
+      errors.push(`Pessoa ${person.id} possui posição ou orientação inválida`);
+    } else if (isFreePlacement) {
+      if (!pointClear(person.position, simulation.personRadiusMeters, scene)) {
+        errors.push(`Pessoa ${person.id} está em conflito`);
+      }
+    } else if (!expected
       || distance(expected.position, person.position) > 1e-5
       || Math.abs(Math.atan2(Math.sin(expected.yawRadians - person.yawRadians), Math.cos(expected.yawRadians - person.yawRadians))) > 1e-5) {
-      errors.push(`Pessoa ${person.id} possui cache inválido`);
+      errors.push(`Pessoa ${person.id} possui cache inválido para o percurso`);
+    } else if (!pointClear(expected.position, simulation.personRadiusMeters, scene)) {
+      errors.push(`Pessoa ${person.id} está em conflito`);
     }
-    if (expected && !pointClear(expected.position, simulation.personRadiusMeters, scene)) errors.push(`Pessoa ${person.id} está em conflito`);
     if (isFinitePoint(person.position)) {
       if (peopleCollisionIndex.overlaps(person.position)) errors.push(`Pessoa ${person.id} colide com outra pessoa`);
       peopleCollisionIndex.insert(person.position);
@@ -385,6 +415,16 @@ function jointCapacity(scene: ProjectScene): PersonPlacement[] {
 function applyCommand(scene: ProjectScene, command: QueueCommand): ProjectScene {
   let updated = scene;
   switch (command.type) {
+    case 'environment:vertex-move': {
+      const result = movePerimeterVertex(scene.environment, command.id, command.position);
+      if (!result.validation.valid) throw new Error(result.validation.errors.join('; '));
+      updated = { ...scene, environment: result.environment };
+      break;
+    }
+    case 'environment:confirm':
+      if (!isValidIsoDateString(command.confirmedAt)) throw new Error('Confirmação do ambiente precisa de data ISO válida');
+      updated = { ...scene, environment: { ...scene.environment, confirmedAt: command.confirmedAt } };
+      break;
     case 'area:add':
       updated = { ...scene, restrictedAreas: [...scene.restrictedAreas, command.area] };
       break;
@@ -432,13 +472,63 @@ function applyCommand(scene: ProjectScene, command: QueueCommand): ProjectScene 
     case 'people:add': {
       const route = scene.routes.find((candidate) => candidate.id === command.routeId);
       if (!route) throw new Error('Percurso não encontrado');
-      const existing = scene.people.filter((person) => person.routeId === route.id);
+      const existing = scene.people.filter((person) => isRoutePersonPlacement(person, route.id));
       const nextDistance = existing.length
         ? Math.max(...existing.map((person) => person.distanceAlongRouteMeters)) + scene.simulation.spacingMeters
         : 0;
       const sample = routePointAt(route, nextDistance);
       if (!sample) throw new Error('Não há capacidade válida após a última pessoa');
       updated = { ...scene, people: [...scene.people, { id: command.id, routeId: route.id, distanceAlongRouteMeters: nextDistance, ...sample }] };
+      break;
+    }
+    case 'person:add':
+      if (command.person.routeId !== null || command.person.distanceAlongRouteMeters !== null) {
+        throw new Error('Nova pessoa deve ser livre, sem percurso ou distância acumulada');
+      }
+      updated = {
+        ...scene,
+        people: [...scene.people, { ...command.person, yawRadians: 0 }],
+      };
+      break;
+    case 'person:move':
+      if (!scene.people.some((person) => person.id === command.id)) throw new Error('Pessoa não encontrada');
+      updated = {
+        ...scene,
+        people: scene.people.map((person) => person.id === command.id
+          ? { ...person, routeId: null, distanceAlongRouteMeters: null, position: command.position }
+          : person),
+      };
+      break;
+    case 'person:rotate':
+      if (!scene.people.some((person) => person.id === command.id)) throw new Error('Pessoa não encontrada');
+      updated = {
+        ...scene,
+        people: scene.people.map((person) => person.id === command.id
+          ? { ...person, routeId: null, distanceAlongRouteMeters: null, yawRadians: command.yawRadians }
+          : person),
+      };
+      break;
+    case 'person:append': {
+      const source = scene.people.find((person) => person.id === command.sourceId);
+      if (!source) throw new Error('Pessoa de origem não encontrada');
+      if (!isFinitePoint(source.position) || !Number.isFinite(source.yawRadians)) {
+        throw new Error('Pessoa de origem possui posição ou orientação inválida');
+      }
+      const spacing = scene.simulation.spacingMeters;
+      const position = {
+        x: source.position.x - Math.sin(source.yawRadians) * spacing,
+        z: source.position.z - Math.cos(source.yawRadians) * spacing,
+      };
+      updated = {
+        ...scene,
+        people: [...scene.people, {
+          id: command.id,
+          routeId: null,
+          distanceAlongRouteMeters: null,
+          position,
+          yawRadians: source.yawRadians,
+        }],
+      };
       break;
     }
     case 'people:fill': {
@@ -462,15 +552,27 @@ function applyCommand(scene: ProjectScene, command: QueueCommand): ProjectScene 
       if (![0.5, 0.8, 1].includes(command.spacingMeters)) throw new Error('Espaçamento deve ser 0.5, 0.8 ou 1.0 m');
       const spacedScene = { ...scene, simulation: { ...scene.simulation, spacingMeters: command.spacingMeters } };
       const redistributed: PersonPlacement[] = [];
+      const freePeople = scene.people.filter((person) => person.routeId === null
+        && person.distanceAlongRouteMeters === null);
       for (const [routeIndex, route] of spacedScene.routes.entries()) {
         const existing = scene.people.filter((person) => person.routeId === route.id);
         const unprocessedPeople = scene.people.filter((person) =>
           spacedScene.routes.slice(routeIndex + 1).some((laterRoute) => laterRoute.id === person.routeId),
         );
-        const placements = candidatePeople(spacedScene, route, [...redistributed, ...unprocessedPeople]).slice(0, existing.length);
+        const placements = candidatePeople(spacedScene, route, [
+          ...freePeople,
+          ...redistributed,
+          ...unprocessedPeople,
+        ]).slice(0, existing.length);
         redistributed.push(...placements.map((person, index) => ({ ...person, id: existing[index]!.id })));
       }
-      updated = { ...spacedScene, people: redistributed };
+      const redistributedById = new Map(redistributed.map((person) => [person.id, person]));
+      const people = scene.people.flatMap((person) => {
+        if (person.routeId === null && person.distanceAlongRouteMeters === null) return [person];
+        const replacement = redistributedById.get(person.id);
+        return replacement ? [replacement] : [];
+      });
+      updated = { ...spacedScene, people };
       break;
     }
   }

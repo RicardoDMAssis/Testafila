@@ -1,7 +1,9 @@
-import type { Belt, EntityId, PointXZ, ProjectScene, QueueRoute, RestrictedArea, Stanchion } from './project.ts';
+import type { Belt, EntityId, PersonPlacement, PointXZ, ProjectScene, QueueRoute, RestrictedArea, Stanchion } from './project.ts';
 
 export interface EditorSelection { kind: 'area' | 'post' | 'belt' | 'route' | 'person'; id: EntityId }
 export type QueueCommand =
+  | { type: 'environment:vertex-move'; id: EntityId; position: PointXZ }
+  | { type: 'environment:confirm'; confirmedAt: string }
   | { type: 'area:add'; area: RestrictedArea }
   | { type: 'area:update'; area: RestrictedArea }
   | { type: 'area:remove'; id: EntityId }
@@ -15,6 +17,10 @@ export type QueueCommand =
   | { type: 'people:add'; routeId: EntityId; id: EntityId }
   | { type: 'people:fill'; routeId: EntityId; idPrefix: string }
   | { type: 'person:remove'; id: EntityId }
+  | { type: 'person:add'; person: PersonPlacement }
+  | { type: 'person:move'; id: EntityId; position: PointXZ }
+  | { type: 'person:rotate'; id: EntityId; yawRadians: number }
+  | { type: 'person:append'; sourceId: EntityId; id: EntityId }
   | { type: 'people:clear'; routeId?: EntityId }
   | { type: 'simulation:spacing'; spacingMeters: number };
 

@@ -103,6 +103,45 @@ test('Nest persists valid queue commands and rejects altered geometry', async ()
       method: 'PATCH', headers, body: JSON.stringify({ ...input, scene: redistributed.scene, expectedRevision: 1 }),
     });
     assert.equal(update.status, 200, await update.text());
+
+    // The visual editor can place a first person without inventing a route.
+    let freeScene = { ...scene, restrictedAreas: [], posts: [], belts: [], routes: [], people: [] };
+    const placeFree = applyQueueCommand(freeScene, {
+      type: 'person:add',
+      person: { id: 'free-a', routeId: null, distanceAlongRouteMeters: null, position: { x: 2, z: 3 }, yawRadians: 0 },
+    });
+    assert.equal(placeFree.valid, true, placeFree.errors.join('; '));
+    freeScene = placeFree.scene;
+    const freeCreateResponse = await fetch(`${base}/api/projects`, {
+      method: 'POST', headers, body: JSON.stringify({ name: 'Fila visual sem percurso', scene: freeScene, expectedRevision: null }),
+    });
+    assert.equal(freeCreateResponse.status, 201, await freeCreateResponse.clone().text());
+    const freeProject = await freeCreateResponse.json();
+    for (const inconsistent of [
+      { ...freeScene.people[0], distanceAlongRouteMeters: 0 },
+      { ...freeScene.people[0], routeId: 'missing-route' },
+    ]) {
+      const response = await fetch(`${base}/api/projects/${freeProject.id}`, {
+        method: 'PATCH', headers, body: JSON.stringify({ name: freeProject.name, scene: { ...freeScene, people: [inconsistent] }, expectedRevision: 1 }),
+      });
+      assert.equal(response.status, 400, 'free person route and distance must both be null');
+    }
+    for (const command of [
+      { type: 'person:rotate', id: 'free-a', yawRadians: Math.PI / 2 },
+      { type: 'person:append', sourceId: 'free-a', id: 'free-b' },
+      { type: 'person:move', id: 'free-a', position: { x: 3, z: 4 } },
+      { type: 'person:rotate', id: 'free-a', yawRadians: -Math.PI / 2 },
+    ]) {
+      const result = applyQueueCommand(freeScene, command);
+      assert.equal(result.valid, true, result.errors.join('; '));
+      freeScene = result.scene;
+    }
+    assert.equal(freeScene.routes.length, 0);
+    assert.ok(Math.abs(freeScene.people[1].position.x - 1.2) < 1e-7, '+1 is behind the source facing +X');
+    const freeUpdate = await fetch(`${base}/api/projects/${freeProject.id}`, {
+      method: 'PATCH', headers, body: JSON.stringify({ name: freeProject.name, scene: freeScene, expectedRevision: 1 }),
+    });
+    assert.equal(freeUpdate.status, 200, await freeUpdate.text());
     await app.close();
     app = await NestFactory.create(AppModule, { logger: false });
     await app.listen(0, '127.0.0.1');
@@ -111,6 +150,11 @@ test('Nest persists valid queue commands and rejects altered geometry', async ()
     const reopened = await reopenedResponse.json();
     assert.equal(reopened.revision, 2);
     assert.deepEqual(reopened.scene, redistributed.scene, 'all queue entities survive a Nest restart');
+    const reopenedFreeResponse = await fetch(`${await app.getUrl()}/api/projects/${freeProject.id}`, { headers: { cookie } });
+    assert.equal(reopenedFreeResponse.status, 200);
+    const reopenedFree = await reopenedFreeResponse.json();
+    assert.equal(reopenedFree.revision, 2);
+    assert.deepEqual(reopenedFree.scene, freeScene, 'free placement, movement and rotation survive a Nest restart');
   } finally {
     if (app) await app.close();
     for (const [key, value] of Object.entries(previous)) {

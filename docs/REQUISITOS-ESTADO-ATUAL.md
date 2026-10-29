@@ -1,5 +1,12 @@
 # Requisitos dos PDFs e estado real
 
+Atualização 28/10: a prioridade autorizada é concluir a interação 3D antes da
+câmera. O fluxo público agora aceita só retângulo, sem coordenadas/altura; cantos
+são ajustados no canvas. Pessoas livres, rotação e +1 não exigem percurso.
+As zonas são desenhadas por arraste com confirmação; câmera tem comandos
+explícitos. Isso não implementa medição pela câmera: a planta segue manual.
+Ver [SPRINT-04.md](SPRINT-04.md) para as mudanças desta etapa.
+
 Conferência direta dos três PDFs da raiz em 22/10/2026. O produto atual é um
 editor manual/3D com backend Nest e SQLite. Não é o MVP WebAR completo dos PDFs.
 Ainda há implementação autônoma de XR pendente; não falta apenas teste físico.

@@ -1,6 +1,6 @@
 ﻿# Entrega e estado atual
 
-Atualizado em 27/10/2026. Leitura principal: [passagem para o colega](PASSAGEM-COLEGA.md).
+Atualizado em 28/10/2026. Leitura principal: [passagem para o colega](PASSAGEM-COLEGA.md).
 O histórico de decisões e bloqueios de 22/10 está em
 [historico/COORDENACAO-2026-10-22.md](historico/COORDENACAO-2026-10-22.md).
 
@@ -8,8 +8,10 @@ O histórico de decisões e bloqueios de 22/10 está em
 
 - Fundação Next/TypeScript + Nest/SQLite, Better Auth e CLI administrativo.
 - Login real, projetos do proprietário, salvar/abrir e conflitos de revisão.
-- Planta manual retangular/poligonal em metros, revisão 3D e confirmação.
-- Zonas, postes/fitas, percursos/pessoas, espaçamento e histórico de comandos.
+- Planta manual retangular em metros e ajuste de cantos por arraste, com confirmação.
+- Paleta junto ao canvas; áreas por desenho/confirmar; postes/fitas e pessoas livres,
+  rotação, +1 atrás, espaçamento e histórico. Percursos antigos continuam compatíveis.
+- Barra de câmera, logo original e bandeja mobile; ver [SPRINT-04.md](SPRINT-04.md).
 - Seleção/arraste, cancelamento e retomada de sessão sem perder o último rascunho.
 - Proxy, limite de tamanho e validação geométrica comum ao cliente e servidor.
 - Documentação centralizada, PDFs de referência e relatórios de QA datados.

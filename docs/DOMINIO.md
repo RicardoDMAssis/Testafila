@@ -19,9 +19,11 @@ de `contracts/project.ts` ou `contracts/queue-editor.ts`.
 - Percurso é uma polilinha independente das fitas. Segmentos e footprint corporal
   devem permanecer dentro do ambiente, com folga, e evitar zonas, postes e fitas.
   Arestas nulas, auto-interseções e retornos adjacentes de 180° são rejeitados.
-- Pessoas são amostradas por distância acumulada ao longo do percurso em múltiplos do
-  espaçamento configurado. O primeiro ponto fica em distância zero; a ponta final só
-  entra quando coincide com essa grade. Caches de posição e yaw são derivados do percurso.
+- Pessoas legadas de percurso têm `routeId` e distância numérica juntos; posição e yaw
+  são caches derivados do percurso e verificados. Pessoas livres têm os dois campos
+  nulos e usam posição/yaw como fonte. Estado parcial, com apenas um campo nulo, é inválido.
+- Preenchimento amostra distâncias acumuladas em múltiplos exatos do spacing. A origem
+  fica em distância zero; não encurta o último intervalo para alcançar a ponta do percurso.
 - Contato/conflito com zonas, obstáculos e footprint de outras pessoas invalida a
   cena. Uma edição é atômica: comando inválido devolve a mesma referência de cena.
 - IDs de ambiente, áreas, vértices, postes, fitas, percursos e pessoas são únicos
@@ -48,13 +50,18 @@ de `contracts/project.ts` ou `contracts/queue-editor.ts`.
 
 | Comando | Efeito |
 | --- | --- |
+| `environment:vertex-move` | Move vértice pelo ID, recalcula evidência de medição, limpa `confirmedAt` e valida a cena inteira antes de aceitar. |
+| `environment:confirm` | Registra o timestamp ISO informado; a validação completa do ambiente/cena continua obrigatória. |
 | `area:add`, `area:update`, `area:remove` | Cria, atualiza ou remove uma área; a validação impede invalidar elementos existentes. |
 | `post:add`, `post:move`, `post:remove` | Cria, move ou remove poste; remover também apaga fitas dependentes na mesma ação. |
 | `belt:add`, `belt:remove` | Gerencia conexões explícitas sem duplicatas nos dois sentidos. Fita não altera percurso. |
 | `route:set`, `route:remove` | Cria/atualiza ou remove percurso; remover limpa as pessoas associadas. |
 | `people:add`, `people:fill` | Insere após a última pessoa ou substitui o grupo da rota com IDs determinísticos `<idPrefix><índice>`. Preenchimento para no primeiro bloqueio. |
+| `person:add` | Cria pessoa livre `null/null` no ponto solicitado, inicialmente voltada para `+Z` (yaw zero). |
+| `person:move`, `person:rotate` | Edita só a pessoa escolhida e converte-a para livre `null/null`; os demais posicionamentos permanecem. |
+| `person:append` | Cria livre atrás da pessoa de origem: `position - (sin(yaw), cos(yaw)) × spacing`, copiando yaw; colisão rejeita a ação inteira. |
 | `person:remove`, `people:clear` | Remove uma pessoa ou limpa um percurso/a cena. |
-| `simulation:spacing` | Aceita 0,5, 0,8 ou 1,0 m e redistribui contagem existente até a capacidade segura. |
+| `simulation:spacing` | Aceita 0,5, 0,8 ou 1,0 m e redistribui somente pessoas de percurso até capacidade segura; livres não se movem e o valor novo governa o próximo append. |
 
 ## Limites e comportamento numérico
 
@@ -74,17 +81,19 @@ de `contracts/project.ts` ou `contracts/queue-editor.ts`.
 
 ## Cobertura verificada
 
-Em 27/10/2026, a suíte de domínio completa executou 116 testes em 20 suítes, sem
+Em 28/10/2026, a suíte de domínio completa executou 125 testes em 20 suítes, sem
 falhas, usando Node 24 com `--experimental-strip-types --experimental-test-isolation=none`.
 Os casos cobrem geometria côncava, footprint/folga, tangência, áreas, postes e fitas,
-retornos e auto-interseções, quinas e extremos, ocupação entre rotas, IDs e caches,
-atomicidade, spacing e undo/redo. Há também teste de geração e validação no teto de
-10.000 pessoas. TypeScript isolado do motor e dos testes e `git diff --check` passaram.
+retornos e auto-interseções, quinas e extremos, ocupação entre rotas/livres, IDs,
+caches, cenas com pessoas livres `null/null`, comandos de mover/girar/append, alteração
+e confirmação do ambiente, atomicidade, spacing e undo/redo. Há teste de geração e
+validação no teto de 10.000 pessoas. TypeScript isolado com `--strict`,
+`npm run build:api` e `git diff --check` passaram.
 
 ## Próximas verificações
 
-- Reexecutar build/typecheck integrado da API e testes Nest no ambiente do coordenador
-  após incorporar esta revisão; esses comandos não foram executados nesta tarefa.
+- Reexecutar os testes Nest no ambiente do coordenador após incorporar esta revisão;
+  o build da API passou nesta tarefa, mas as integrações Nest não foram executadas.
 - Completar QA manual humano de gestos e legibilidade conforme `docs/QA-FECHAMENTO-LOTE-03.md`.
 - WebXR/câmera e realinhamento continuam pendentes de implementação e validação em
   aparelhos reais; ver `docs/REQUISITOS-ESTADO-ATUAL.md`.
